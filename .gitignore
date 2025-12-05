@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+/env/
+venv/
+.venv/
+*.log
+
+# VS Code
+.vscode/
+
+# Project Specific
+*.gb
+*.gbc
+*.ram
+*.state
+experiments/logs/
+checkpoints/
