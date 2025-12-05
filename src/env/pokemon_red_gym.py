@@ -16,67 +16,43 @@ class PokemonRedGym(gym.Env):
     - Info: RAM data (for Director/Graph only).
     """
     
-    def __init__(self, rom_path='pokemon_red.gb', state_path='initial.state', headless=True, emulation_speed=0, sim_scale=3):
+    def __init__(self, rom_path='pokemon_red.gb', state_path='initial.state', headless=True, emulation_speed=0, sim_scale=3, max_steps=2048):
         super().__init__()
         
-        # Define window backend
         window_backend = "headless" if headless else "SDL2"
-        
-        # 1. Initialize PyBoy
-        self.pyboy = pyboy.PyBoy(
-            rom_path, 
-            window=window_backend
-        )
-        
+        self.pyboy = pyboy.PyBoy(rom_path, window=window_backend)
         self.pyboy.set_emulation_speed(emulation_speed)
         
-        # 2. Action Space (Buttons)
+        # ... (Action/Release lists remain the same) ...
         self.valid_actions = [
-            WindowEvent.PRESS_ARROW_DOWN,
-            WindowEvent.PRESS_ARROW_LEFT,
-            WindowEvent.PRESS_ARROW_RIGHT,
-            WindowEvent.PRESS_ARROW_UP,
-            WindowEvent.PRESS_BUTTON_A,
-            WindowEvent.PRESS_BUTTON_B,
-            WindowEvent.PRESS_BUTTON_START,
-            WindowEvent.PRESS_BUTTON_SELECT
+            WindowEvent.PRESS_ARROW_DOWN, WindowEvent.PRESS_ARROW_LEFT, WindowEvent.PRESS_ARROW_RIGHT, WindowEvent.PRESS_ARROW_UP,
+            WindowEvent.PRESS_BUTTON_A, WindowEvent.PRESS_BUTTON_B, WindowEvent.PRESS_BUTTON_START
         ]
-        
         self.release_actions = [
-            WindowEvent.RELEASE_ARROW_DOWN,
-            WindowEvent.RELEASE_ARROW_LEFT,
-            WindowEvent.RELEASE_ARROW_RIGHT,
-            WindowEvent.RELEASE_ARROW_UP,
-            WindowEvent.RELEASE_BUTTON_A,
-            WindowEvent.RELEASE_BUTTON_B,
-            WindowEvent.RELEASE_BUTTON_START,
-            WindowEvent.RELEASE_BUTTON_SELECT
+            WindowEvent.RELEASE_ARROW_DOWN, WindowEvent.RELEASE_ARROW_LEFT, WindowEvent.RELEASE_ARROW_RIGHT, WindowEvent.RELEASE_ARROW_UP,
+            WindowEvent.RELEASE_BUTTON_A, WindowEvent.RELEASE_BUTTON_B, WindowEvent.RELEASE_BUTTON_START
         ]
-        
         self.action_space = spaces.Discrete(len(self.valid_actions))
-
-        # 3. Observation Space
         self.observation_space = spaces.Box(low=0, high=255, shape=(1, 84, 84), dtype=np.uint8)
-
-        # 4. CRITICAL: Initialize Memory Access
         self.memory = self.pyboy.memory
         
-        # 5. Initialize State Handling (The "Reset" Fix)
+        # State Loading
         self.state_path = state_path
         if os.path.exists(self.state_path):
             print(f"Loading initial state from {self.state_path}...")
             with open(self.state_path, "rb") as f:
                 self.pyboy.load_state(f)
         else:
-            print("No state file found. Starting from fresh boot (Intro).")
-            # Burn frames only if we are fresh booting
-            for _ in range(40):
-                self.pyboy.tick()
+            print("No state file found. Starting fresh.")
+            for _ in range(40): self.pyboy.tick()
         
-        # Save this loaded state (or fresh state) into memory for fast resetting
         self.reset_state_buffer = io.BytesIO()
         self.pyboy.save_state(self.reset_state_buffer)
-
+        
+        # EPISODE MANAGEMENT
+        self.step_count = 0
+        self.max_steps = max_steps # Now configurable!
+        
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         

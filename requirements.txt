@@ -1,7 +1,12 @@
+--index-url https://download.pytorch.org/whl/cu121
 pyboy
-torch
 gymnasium
 numpy
 opencv-python
 networkx
 tensorboard
+tqdm
+torch
+torchvision
+torchaudio
+pyyaml
