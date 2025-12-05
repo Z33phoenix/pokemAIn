@@ -1,0 +1,1 @@
+"""The main class that holds the Director and Specialist brains."""

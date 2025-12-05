@@ -1,0 +1,1 @@
+"""A class to store the topological map (Nodes = Game Locations, Edges = Transitions)."""

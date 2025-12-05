@@ -1,0 +1,33 @@
+vision:
+  latent_dim: 256
+  encoder_type: vqvae
+  commitment_cost: 0.25
+
+director:
+  learning_rate: 0.0003
+  batch_size: 512
+  update_interval: 4
+
+specialists:
+  battle:
+    algorithm: beyond_the_rainbow
+    learning_rate: 0.0001
+    n_atoms: 51
+    v_min: -200
+    v_max: 200
+  navigation:
+    algorithm: crossq
+    learning_rate: 0.00005
+    q_branches: 8
+    gamma: 0.995
+
+environment:
+  frame_shape: [84, 84, 1]
+  action_repeat: 4
+  max_steps: 4096
+
+training:
+  buffer_size: 200000
+  batch_size: 128
+  gamma: 0.99
+  target_update: 1000
