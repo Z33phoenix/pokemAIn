@@ -82,5 +82,12 @@ class CrossQNavAgent(nn.Module):
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
+
+        td_error = (q_pred - q_target).detach()
+        stats = {
+            "nav/td_abs_mean": td_error.abs().mean().item(),
+            "nav/q_pred_mean": q_pred.detach().mean().item(),
+            "nav/q_target_mean": q_target.detach().mean().item(),
+        }
         
-        return loss.item()
+        return loss.item(), stats

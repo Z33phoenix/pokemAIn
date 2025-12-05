@@ -52,6 +52,8 @@ class HierarchicalAgent:
         # Returns: specialist_index (0/1), features (512-dim), force_action (from Graph)
         specialist_idx, features, force_action = self.director.select_specialist(obs_t, info, epsilon)
         
+        # Force NAV only for pre-training
+        specialist_idx = 0
         self.current_specialist_idx = specialist_idx
         
         # B. Check for Graph Override (Backtracking)

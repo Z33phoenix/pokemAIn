@@ -69,7 +69,7 @@ def train():
     TOTAL_STEPS = 5_000_000
     BATCH_SIZE = TRN_CFG['batch_size']
     GAMMA = TRN_CFG['gamma']
-    SAVE_FREQ = 10_000
+    SAVE_FREQ = 2_000
     
     # Frequencies
     FAST_FREQ = 4
@@ -115,9 +115,10 @@ def train():
                 with torch.no_grad():
                     s_feat = agent.director.encoder(s)
                     ns_feat = agent.director.encoder(ns)
-                nav_loss = agent.nav_brain.train_step(s_feat, a, r, ns_feat, d)
+                nav_loss, nav_stats = agent.nav_brain.train_step(s_feat, a, r, ns_feat, d)
                 nav_buffer.update_priorities(idx, [nav_loss + 1e-5] * BATCH_SIZE)
                 metrics['loss/nav'] = nav_loss
+                metrics.update(nav_stats)
 
             # Fast Loop (Battle)
             if len(battle_buffer) > BATCH_SIZE:
@@ -146,6 +147,13 @@ def train():
                 director_buffer.update_priorities(idx, [director_loss.item() + 1e-5] * BATCH_SIZE)
                 metrics['loss/director'] = director_loss.item()
 
+            metrics['policy/epsilon'] = epsilon
+            metrics['buffer/nav_fill'] = len(nav_buffer) / BUFFER_SIZE
+            metrics['buffer/battle_fill'] = len(battle_buffer) / BUFFER_SIZE
+            # inside the FAST_FREQ block, where metrics is a dict
+            metrics['reward/step'] = ram_reward
+
+
             if len(metrics) > 0:
                 logger.log_step(metrics, step)
 
@@ -165,8 +173,10 @@ def train():
             
         if step % SAVE_FREQ == 0:
             agent.save("checkpoints", tag="latest")
+            print("Saved Latest checkpoint at step", step)
             if step % (SAVE_FREQ * 5) == 0:
                  agent.save("checkpoints", tag=f"step_{step}")
+                 print("Saved Backup checkpoint at step", step)
 
     logger.close()
     env.close()

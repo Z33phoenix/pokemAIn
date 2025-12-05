@@ -20,7 +20,7 @@ class PokemonRedGym(gym.Env):
         super().__init__()
         
         window_backend = "headless" if headless else "SDL2"
-        self.pyboy = pyboy.PyBoy(rom_path, window=window_backend)
+        self.pyboy = pyboy.PyBoy(rom_path, window=window_backend, sound_volume=0)
         self.pyboy.set_emulation_speed(emulation_speed)
         
         # ... (Action/Release lists remain the same) ...
@@ -52,7 +52,7 @@ class PokemonRedGym(gym.Env):
         # EPISODE MANAGEMENT
         self.step_count = 0
         self.max_steps = max_steps # Now configurable!
-        
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         
