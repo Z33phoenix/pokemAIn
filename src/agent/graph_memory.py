@@ -40,10 +40,12 @@ class GraphMemory:
         Updates the graph with the current observation.
         """
         state_hash = self.get_state_hash(observation)
+        is_new_state = False
         
         # 1. Add Node if new
         if not self.graph.has_node(state_hash):
             self.graph.add_node(state_hash, visits=1)
+            is_new_state = True
             # RAM SAFETY: Prune if too big
             if self.graph.number_of_nodes() > self.max_nodes:
                 self._prune_graph()
@@ -55,9 +57,8 @@ class GraphMemory:
             if self.current_node != state_hash:
                 if not self.graph.has_edge(self.current_node, state_hash):
                     self.graph.add_edge(self.current_node, state_hash, action=last_action, weight=1)
-        
         self.current_node = state_hash
-        return state_hash
+        return state_hash, is_new_state
 
     def _prune_graph(self):
         """

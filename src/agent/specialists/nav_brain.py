@@ -7,21 +7,19 @@ class CrossQNavAgent(nn.Module):
     """
     Navigation Specialist using CrossQ (Batch-Norm DDPG/DQN style).
     
-    Key Concept:
-    - Removes the "Target Network" found in standard DQN.
-    - Uses Batch Normalization to stabilize Q-values immediately.
-    - Result: Learns simple tasks (like walking) much faster.
+    UPDATED FOR END-TO-END TRAINING:
+    - Input: Pre-processed Feature Vectors (512 dim), NOT Images.
+    - Output: Loss Tensor (for external backward pass).
     """
     def __init__(self, input_dim=512, action_dim=8, lr=1e-4, gamma=0.99):
         super().__init__()
         self.action_dim = action_dim
         self.gamma = gamma
         
-        # 1. The Q-Network (No Target Net!)
-        # We use Batch Norm (BN) to allow aggressive updates
+        # 1. The Q-Network
         self.q_net = nn.Sequential(
             nn.Linear(input_dim, 256),
-            nn.BatchNorm1d(256), # The Secret Sauce of CrossQ
+            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Linear(256, 256),
             nn.BatchNorm1d(256),
@@ -34,7 +32,7 @@ class CrossQNavAgent(nn.Module):
 
     def forward(self, features):
         """
-        Predict Q-values for all actions given visual features.
+        Predict Q-values given visual features (from Director).
         """
         return self.q_net(features)
 
@@ -47,47 +45,45 @@ class CrossQNavAgent(nn.Module):
             return np.random.randint(0, self.action_dim)
         
         # Exploitation
-        # CRITICAL FIX: Switch to eval mode to handle Batch Norm with size 1
         self.eval() 
         with torch.no_grad():
             q_values = self.forward(features)
             action = torch.argmax(q_values, dim=1).item()
         
-        # Switch back to train mode so the network learns later
         self.train()
-        
         return action
 
-    def train_step(self, states, actions, rewards, next_states, dones):
+    def train_step_return_loss(self, features, actions, rewards, next_features, dones):
         """
-        CrossQ Update Step.
-        Note: We calculate target Q-values using the CURRENT network.
+        Calculates loss but DOES NOT optimize.
+        Returns the Loss Tensor so the outer loop can backpropagate through 
+        both this network AND the Director's Encoder.
+        
+        Args:
+            features: Tensor (B, 512) - Output from Director.vision(state)
+            next_features: Tensor (B, 512) - Output from Director.vision(next_state)
         """
         # 1. Predictions
-        # Q(s, a)
-        q_values = self.forward(states)
+        q_values = self.forward(features)
         q_pred = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
         
-        # 2. Targets (The CrossQ difference)
-        # Standard DQN uses 'target_net'. We use 'self.q_net' directly.
-        # This works because BatchNorm stabilizes the shifting distribution.
+        # 2. Targets
+        # Note: We detach next_features because we don't need gradients for the target
         with torch.no_grad():
-            next_q_values = self.forward(next_states)
+            next_q_values = self.forward(next_features)
             max_next_q = next_q_values.max(1)[0]
             q_target = rewards + (self.gamma * max_next_q * (1 - dones))
         
-        # 3. Optimization
+        # 3. Calculate Loss
         loss = self.loss_fn(q_pred, q_target)
         
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
+        # 4. Metrics
         td_error = (q_pred - q_target).detach()
         stats = {
             "nav/td_abs_mean": td_error.abs().mean().item(),
             "nav/q_pred_mean": q_pred.detach().mean().item(),
-            "nav/q_target_mean": q_target.detach().mean().item(),
+            "nav/loss": loss.item()
         }
         
-        return loss.item(), stats
+        # CRITICAL: Return the Tensor, not the item.
+        return loss, stats

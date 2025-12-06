@@ -1,105 +1,103 @@
 import torch
 import torch.nn as nn
 import numpy as np
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional
 from src.vision.encoder import NatureCNN
-from src.agent.graph_memory import GraphMemory
 
-class Director(nn.Module):
+@dataclass
+class Blackboard:
     """
-    The High-Level Controller.
+    The 'Consciousness' of the AI. 
+    This persists across all agents and holds the truth of the world.
+    Populated by a Vision/OCR wrapper (which adheres to your visual-only constraint).
+    """
+    # Self State
+    party_avg_hp_percent: float = 1.0
+    lead_pokemon_hp_percent: float = 1.0
+    is_poisoned: bool = False
+    in_battle: bool = False
+    in_menu: bool = False
     
-    Roles:
-    1. Perception: Holds the Shared Vision Encoder (NatureCNN).
-    2. Routing: Decides which Specialist (Nav vs Battle) should act.
-    3. Memory: Maintains the GraphMemory for long-term topology.
+    # World State
+    current_map_id: int = 0
+    last_town_map_id: int = 0
+    items: Dict[str, int] = field(default_factory=dict) # e.g., {'potion': 2}
+    
+    # Metrics
+    steps_since_last_heal: int = 0
+    battle_win_rate_last_10: float = 0.5
+
+class DriveSystem:
     """
-    def __init__(self, action_dim=2, load_path=None):
+    Calculates the 'Urge' to do something based on the Blackboard.
+    Returns a score between 0.0 and 1.0.
+    """
+    @staticmethod
+    def get_survival_score(bb: Blackboard) -> float:
+        # Urge increases exponentially as HP drops
+        # Formula: (1 - hp)^2. If HP is 0.1, score is 0.81. If HP is 0.9, score is 0.01
+        score = (1.0 - bb.lead_pokemon_hp_percent) ** 2
+        if bb.is_poisoned:
+            score += 0.5 # Panic boost
+        return min(score, 1.0)
+
+    @staticmethod
+    def get_grind_score(bb: Blackboard) -> float:
+        # If we are losing battles, we need to grind.
+        return 1.0 - bb.battle_win_rate_last_10
+
+    @staticmethod
+    def get_explore_score(bb: Blackboard) -> float:
+        # Default urge to move forward
+        return 0.3
+
+class CognitiveDirector(nn.Module):
+    def __init__(self):
         super().__init__()
+        # The Shared Eyes
+        self.vision = NatureCNN()
         
-        # 1. SHARED VISION (The Eyes)
-        # We output 512 features that will be fed to the Specialists too.
-        self.encoder = NatureCNN()
+        # The Logic Core
+        self.blackboard = Blackboard()
+        self.current_goal = "explore"
         
-        # 2. THE ROUTER (The Gating Network)
-        # Input: 512 visual features
-        # Output: 2 logits (Probability of [Nav_Specialist, Battle_Specialist])
-        self.router = nn.Sequential(
-            nn.Linear(512, 64),
-            nn.ReLU(),
-            nn.Linear(64, action_dim) # [0]=Nav, [1]=Battle
-        )
-        
-        # 3. THE CARTOGRAPHER (Non-differentiable Memory)
-        self.graph = GraphMemory()
-        self.current_node = None
-        
-        # 4. STATE TRACKING
-        self.backtracking_mode = False
-        self.target_path = [] # Queue of actions to follow if backtracking
+        # Graph Memory for backtracking
+        self.graph_path = []
 
-    def forward(self, x):
-        """
-        Forward pass for the Routing Network.
-        Returns: logits, features
-        """
-        features = self.encoder(x)
-        logits = self.router(features)
-        return logits, features
+    def get_backtrack_action(self):
+        """Returns the next action if we are in a hard-coded pathing mode"""
+        if self.graph_path:
+            return self.graph_path.pop(0)
+        return None
 
-    def select_specialist(self, obs, info, epsilon=0.1):
+    def forward(self, x, info):
         """
-        Decides WHO controls the body.
-        
         Args:
-            obs: Can be Tensor (B, C, H, W) OR Numpy (C, H, W)
+            x: Tensor image (Batch, C, H, W)
+            info: Dict containing metadata (OCR results, etc)
         """
-        # 1. PREPARE DATA
-        # Neural Network needs Tensor (B, C, H, W)
-        # Graph Memory needs Numpy (C, H, W)
+        # 1. Vision Pass (Always happens)
+        features = self.vision(x)
         
-        if isinstance(obs, torch.Tensor):
-            # We have a Tensor (likely on GPU). 
-            # Use it for the network, but detach/cpu for the graph.
-            obs_t = obs
-            # Remove batch dim [0] for the graph -> (1, 84, 84)
-            obs_np = obs[0].detach().cpu().numpy().astype(np.uint8)
-        else:
-            # We have a Numpy array.
-            obs_np = obs
-            # Create tensor with batch dimension -> (1, 1, 84, 84)
-            obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
-            if next(self.parameters()).is_cuda:
-                obs_t = obs_t.cuda()
-
-        # 2. Update the Map (Mapping Phase)
-        # Graph uses the CPU Numpy version
-        current_hash = self.graph.update(obs_np, last_action=None) 
+        # 2. Update Knowledge
+        self.update_perception(info)
         
-        # 3. Heuristic / Neural Selection
-        with torch.no_grad():
-            # Network uses the GPU Tensor version
-            logits, features = self.forward(obs_t)
-            
-        # 4. Graph Override (The "Oak's Parcel" Logic)
-        if self.backtracking_mode and len(self.target_path) > 0:
-            next_move = self.target_path.pop(0)
-            return 0, features, next_move 
-            
-        # 5. Epsilon-Greedy Selection
-        if np.random.random() < epsilon:
-            specialist_idx = np.random.randint(0, 2)
-        else:
-            specialist_idx = torch.argmax(logits).item()
-            
-        return specialist_idx, features, None
+        # 3. Logic Step
+        agent_idx = self.think()
+        
+        return agent_idx, features, self.current_goal
 
-    def plan_backtrack(self, target_node_hash):
-        """
-        Triggers backtracking mode. Uses Dijkstra to find path in Graph.
-        """
-        path_actions = self.graph.find_path_to_start(target_node_hash)
-        if path_actions:
-            self.backtracking_mode = True
-            self.target_path = path_actions
-            return True
-        return False
+    def update_perception(self, info):
+        # ... logic to update Blackboard from info dict ...
+        pass
+
+    def think(self):
+        # ... logic to return 0, 1, or 2 based on DriveSystem ...
+        # (See previous response for the DriveSystem logic)
+        bb = self.blackboard
+        
+        # Example Logic:
+        if bb.in_battle: return 1
+        if bb.in_menu: return 2
+        return 0

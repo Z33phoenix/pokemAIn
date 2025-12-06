@@ -16,7 +16,7 @@ class PokemonRedGym(gym.Env):
     - Info: RAM data (for Director/Graph only).
     """
     
-    def __init__(self, rom_path='pokemon_red.gb', state_path='initial.state', headless=True, emulation_speed=0, sim_scale=3, max_steps=2048):
+    def __init__(self, rom_path='pokemon_red.gb', state_path='initial.state', headless=True, emulation_speed=0, max_steps=2048):
         super().__init__()
         
         window_backend = "headless" if headless else "SDL2"
@@ -91,12 +91,30 @@ class PokemonRedGym(gym.Env):
         return np.array(resized, dtype=np.uint8)[None, ...]
 
     def _get_info(self):
+        # Read HP (Low byte first usually, but simplified here for 8-bit approximation or assuming helper exists)
+        # In Red, HP is 2 bytes. 
+        # 0xD16C = Current HP (High Byte), 0xD16D = Current HP (Low Byte)
+        # We will just grab the High byte for coarse estimation or implement a helper
+        
+        hp_current = self.memory[0xD16C] * 256 + self.memory[0xD16D]
+        hp_max = self.memory[0xD16E] * 256 + self.memory[0xD16F]
+        
+        hp_percent = 0.0
+        if hp_max > 0:
+            hp_percent = hp_current / hp_max
+
         return {
             "map_id": self.memory[ram_map.MAP_N],
             "x": self.memory[ram_map.X_POS],
             "y": self.memory[ram_map.Y_POS],
             "battle_active": self.memory[ram_map.BATTLE_TYPE] != 0,
-            "party_size": self.memory[ram_map.PARTY_SIZE]
+            "party_size": self.memory[ram_map.PARTY_SIZE],
+            # NEW FIELDS FOR DIRECTOR
+            "hp_percent": hp_percent,
+            "hp_current": hp_current,
+            # 0xD018 is often used for battle type/status. 
+            # You might need to check your specific ram_map for "Player Status" (Poison/Burn)
+            # "status_ailment": self.memory[0xD16F] 
         }
 
     def render(self):
