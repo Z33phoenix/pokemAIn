@@ -1,30 +1,26 @@
 import numpy as np
+from typing import Any, Dict, Optional, Tuple
+
+from src.env import ram_map
+
 
 class RewardSystem:
-    def __init__(self):
-        # --- Navigation Weights ---
-        self.W_STEP_BASE   = -0.01   # Lower cost to encourage long-term exploration
-        self.W_TILE_NEW    =  0.50   # Boosted to encourage mapping
-        self.W_MAP_NEW     =  2.00   # Big event
-        self.W_WALL_BUMP   = -0.10
-        self.W_STALE       = -0.20   # Lower penalty so it doesn't panic-spin
-        self.STALE_THRESH  =  120    # More patience
+    """Reward shaping heuristics configured entirely via YAML."""
 
-        # --- Gameplay Weights (New) ---
-        self.W_CATCH_MON   =  5.0    # Huge reward for getting the starter
-        self.W_LEVEL_UP    =  2.0    # Reward for grinding
-        self.W_IN_BATTLE   =  0.05   # Small drip reward for STAYING in battle (don't run)
-        self.W_WIN_BATTLE  =  3.0    # Reward for winning (this is harder to detect without RAM, but we try)
-
-        # --- Tracking ---
-        self.visited_maps = set()
-        self.seen_coords = set()
-        self.last_coord = (0, 0, 0)
+    def __init__(self, config: Dict[str, float]):
+        self.config = config
+        self.visited_maps: set[int] = set()
+        self.seen_coords: set[Tuple[int, int, int]] = set()
+        self.last_coord: Tuple[int, int, int] = (0, 0, 0)
         self.steps_stagnant = 0
-        
-        # State tracking for diffs
         self.max_party_size = 0
-        self.total_levels = 0
+        self.last_xp = 0
+        self.last_hp_fraction = 1.0
+        self.was_in_battle = False
+        self.last_menu_cursor: Optional[Tuple[int, int]] = None
+        self.last_menu_target: Optional[int] = None
+        self.menu_steps_stagnant = 0
+        self.last_menu_open = False
 
     def reset(self):
         self.visited_maps.clear()
@@ -32,67 +28,157 @@ class RewardSystem:
         self.last_coord = (0, 0, 0)
         self.steps_stagnant = 0
         self.max_party_size = 0
-        self.total_levels = 0
+        self.last_xp = 0
+        self.last_hp_fraction = 1.0
+        self.was_in_battle = False
+        self.last_menu_cursor = None
+        self.last_menu_target = None
+        self.menu_steps_stagnant = 0
+        self.last_menu_open = False
 
-    def compute_reward(self, info, memory_bus, obs, action):
-        reward = 0.0
-        
-        # 1. Navigation Logic
-        # ------------------------------------------
+    def compute_components(
+        self,
+        info: Dict[str, Any],
+        memory_bus,
+        obs,
+        action: int,
+        goal_ctx: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, float]:
+        """
+        Returns a dict of reward components keyed by specialist type plus a global term.
+        The caller is responsible for combining/clipping as needed.
+        """
+        cfg = self.config
+        rewards = {
+            "global_reward": cfg.get("step_penalty", 0.0),
+            "nav_reward": 0.0,
+            "battle_reward": 0.0,
+            "menu_reward": 0.0,
+        }
+
         map_id = info.get("map_id", 0)
         x, y = info.get("x", 0), info.get("y", 0)
-        current_coord = (map_id, x, y)
+        coord = (map_id, x, y)
 
-        # Exploration Rewards
         if map_id not in self.visited_maps:
             self.visited_maps.add(map_id)
-            reward += self.W_MAP_NEW
-        
-        if current_coord not in self.seen_coords:
-            self.seen_coords.add(current_coord)
-            reward += self.W_TILE_NEW
+            rewards["nav_reward"] += cfg.get("new_map", 0.0)
 
-        # Movement / Stagnation penalties
-        feet_moved = (current_coord != self.last_coord)
-        if not feet_moved and action < 4: 
-            reward += self.W_WALL_BUMP
+        if coord not in self.seen_coords:
+            self.seen_coords.add(coord)
+            rewards["nav_reward"] += cfg.get("new_tile", 0.0)
+
+        moved = coord != self.last_coord
+        if not moved and action < 4:
+            rewards["nav_reward"] += cfg.get("wall_bump", 0.0)
             self.steps_stagnant += 1
-            if self.steps_stagnant > self.STALE_THRESH:
-                reward += self.W_STALE
+            if self.steps_stagnant > cfg.get("stale_threshold", 0):
+                rewards["nav_reward"] += cfg.get("stale_penalty", 0.0)
         else:
             self.steps_stagnant = 0
-            self.last_coord = current_coord
-        
-        # Apply Base Step Cost
-        reward += self.W_STEP_BASE
+            self.last_coord = coord
 
-        # 2. Gameplay Logic (The Fix)
-        # ------------------------------------------
-        # We need to extract these from 'info' or 'memory_bus'
-        # If your environment provides them directly:
-        party_size = info.get("party_size", 0) 
-        # Sum of all pokemon levels in party (proxy for XP gain)
-        current_levels = sum(info.get("levels", [0])) 
-        
-        # Reward: Caught a Pokemon (Starter included)
+        party_size = info.get("party_size", 0)
         if party_size > self.max_party_size:
-            diff = party_size - self.max_party_size
-            reward += (self.W_CATCH_MON * diff)
+            rewards["global_reward"] += cfg.get("catch_pokemon", 0.0) * (party_size - self.max_party_size)
             self.max_party_size = party_size
-        
-        # Reward: Leveled Up (Encourages fighting Pidgeys)
-        if current_levels > self.total_levels:
-            # First frame might initialize at 5, ignore the jump from 0 to 5
-            if self.total_levels > 0:
-                reward += self.W_LEVEL_UP
-            self.total_levels = current_levels
 
-        # Reward: In Battle (Drip feed)
-        # Check if the address implies battle (game specific) 
-        # Or if the wrapper provides a boolean
-        if info.get("in_battle", False): 
-            reward += self.W_IN_BATTLE
+        current_xp = ram_map.read_first_mon_exp(memory_bus)
+        if current_xp > self.last_xp > 0:
+            rewards["global_reward"] += cfg.get("level_up", 0.0)
+        self.last_xp = current_xp
 
-        # ------------------------------------------
+        battle_active = info.get("battle_active", False)
+        if battle_active:
+            rewards["battle_reward"] += cfg.get("battle_tick", 0.0)
+        else:
+            if self.was_in_battle:
+                hp_percent = info.get("hp_percent")
+                if hp_percent is None:
+                    hp_cur = (memory_bus[ram_map.HP_CURRENT] << 8) | memory_bus[ram_map.HP_CURRENT + 1]
+                    hp_max = (memory_bus[ram_map.HP_MAX] << 8) | memory_bus[ram_map.HP_MAX + 1]
+                    hp_percent = (hp_cur / hp_max) if hp_max > 0 else 0.0
+                if hp_percent is not None and hp_percent < cfg.get("battle_loss_threshold", 0.0):
+                    rewards["battle_reward"] += cfg.get("battle_loss", 0.0)
+                else:
+                    rewards["battle_reward"] += cfg.get("battle_win", 0.0)
+        self.was_in_battle = battle_active
 
-        return float(np.clip(reward, -5.0, 5.0))
+        hp_percent = info.get("hp_percent")
+        if hp_percent is None:
+            hp_cur = (memory_bus[ram_map.HP_CURRENT] << 8) | memory_bus[ram_map.HP_CURRENT + 1]
+            hp_max = (memory_bus[ram_map.HP_MAX] << 8) | memory_bus[ram_map.HP_MAX + 1]
+            hp_percent = (hp_cur / hp_max) if hp_max > 0 else 0.0
+        if hp_percent > self.last_hp_fraction and hp_percent >= cfg.get("heal_target", 0.0):
+            rewards["global_reward"] += cfg.get("heal_success", 0.0)
+        self.last_hp_fraction = hp_percent
+
+        rewards["menu_reward"] = self.compute_menu_reward(info, goal_ctx)
+
+        clip_value = cfg.get("reward_clip", np.inf)
+        for key, value in rewards.items():
+            rewards[key] = float(np.clip(value, -clip_value, clip_value))
+        return rewards
+
+    def compute_reward(self, info: Dict[str, Any], memory_bus, obs, action: int) -> float:
+        """
+        Backwards-compatible scalar reward. Prefer compute_components for new code.
+        """
+        rewards = self.compute_components(info, memory_bus, obs, action)
+        return float(sum(rewards.values()))
+
+    def compute_menu_reward(
+        self, info: Dict[str, Any], goal_ctx: Optional[Dict[str, Any]]
+    ) -> float:
+        """
+        Menu-specific shaping:
+        - Reward cursor movement to escape stalling.
+        - Reward highlighting the requested entry.
+        - Penalize stale cursor positions.
+        - Reward opening/being inside a menu (bag/PC/party/etc.).
+        All weights come from the rewards.menu config block.
+        """
+        menu_cfg = self.config.get("menu", {})
+        if not info.get("menu_open"):
+            self.last_menu_cursor = None
+            self.menu_steps_stagnant = 0
+            self.last_menu_target = info.get("menu_target")
+            self.last_menu_open = False
+            return 0.0
+
+        reward = 0.0
+        # Reward entering or staying in a menu so the specialist learns to open/start menus.
+        if not self.last_menu_open:
+            reward += menu_cfg.get("opened_menu", 0.0)
+        reward += menu_cfg.get("open_bonus", 0.0)
+
+        cursor = info.get("menu_cursor")
+        current_target = info.get("menu_target")
+        desired_target = None
+        desired_cursor = None
+        if goal_ctx:
+            target = goal_ctx.get("target", {}) or {}
+            desired_target = target.get("menu_target", desired_target)
+            desired_cursor = target.get("cursor", desired_cursor)
+
+        if desired_target is not None and current_target is not None:
+            if current_target == desired_target:
+                reward += menu_cfg.get("correct_target", 0.0)
+
+        if cursor is not None:
+            if desired_cursor is not None and tuple(cursor) == tuple(desired_cursor):
+                reward += menu_cfg.get("cursor_on_target", 0.0)
+            if self.last_menu_cursor is not None and cursor != self.last_menu_cursor:
+                reward += menu_cfg.get("cursor_move", 0.0)
+                self.menu_steps_stagnant = 0
+            else:
+                self.menu_steps_stagnant += 1
+                if self.menu_steps_stagnant >= menu_cfg.get("stale_threshold", 0):
+                    reward += menu_cfg.get("stale_penalty", 0.0)
+        else:
+            self.menu_steps_stagnant = 0
+        self.last_menu_cursor = cursor
+        self.last_menu_target = current_target
+        self.last_menu_open = True
+        clip_value = menu_cfg.get("reward_clip", self.config.get("reward_clip", np.inf))
+        return float(np.clip(reward, -clip_value, clip_value))

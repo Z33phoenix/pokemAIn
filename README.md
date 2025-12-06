@@ -18,6 +18,12 @@ am_map.py.
 - experiments/phase*_*.py: Sequential training stages (vision pretraining, director routing, full-loop fine-tuning).
 - config/hyperparameters.yaml: Centralized training knobs for Director, Specialists, and environment wrappers.
 
+## Phased Specialist Training
+- Capture focused save states into `states/`, organized per phase (e.g., `states/nav/`, `states/battle/`, `states/menu/`). Each folder can hold multiple `.state` files (different towns/routes, different trainer battles/party comps, different menu contexts or no-menu states to train opening START). Use `python setup_game.py --phase nav --state-path states/nav/nav_route1.state` (repeat as needed; add `--resume-from` to branch from an existing state).
+- Pretrain each specialist with `python experiments/train_nav_phase.py --state-path states/nav`, `python experiments/train_battle_phase.py --state-path states/battle`, and `python experiments/train_menu_phase.py --state-path states/menu`. Each episode will randomly pick one of the available states in the specified directory.
+- Scale out any phase with the multi-agent launcher: `python experiments/train_multi_agent.py --phase nav --state-path states/nav --num-agents 4 --combine-best`.
+- After specialists are prepared, run the full loop with `experiments/train_end_to_end.py` (or `train_multi_agent.py --phase full`) using `states/initial.state` for director + integration training.
+
 ## Next Steps
 1. Implement the VQ-VAE / ResNet encoder and collect an unsupervised dataset using PyBoy screenshots.
 2. Bring up the custom Gym wrapper so that the experiments can step the emulator headlessly.

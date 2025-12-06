@@ -51,12 +51,13 @@ class PrioritizedReplayBuffer:
     - Stores images as uint8 to save RAM (4x space saving).
     - Returns float32 tensors for training.
     """
-    def __init__(self, capacity, obs_shape, alpha=0.6, device="cpu"):
+    def __init__(self, capacity, obs_shape, alpha=0.6, device="cpu", goal_shape=None, store_context=False):
         self.capacity = capacity
         self.alpha = alpha
         self.device = device
         self.pos = 0
         self.full = False
+        self.store_context = store_context or goal_shape is not None
         
         # Pre-allocate memory for speed
         self.obs_buf = np.zeros((capacity, *obs_shape), dtype=np.uint8)
@@ -64,19 +65,41 @@ class PrioritizedReplayBuffer:
         self.action_buf = np.zeros((capacity,), dtype=np.int64)
         self.reward_buf = np.zeros((capacity,), dtype=np.float32)
         self.done_buf = np.zeros((capacity,), dtype=np.float32)
+
+        # Optional goal/intent buffers for goal-conditioned heads
+        self.goal_buf = None
+        self.next_goal_buf = None
+        if goal_shape is not None:
+            self.goal_buf = np.zeros((capacity, *goal_shape), dtype=np.float32)
+            self.next_goal_buf = np.zeros((capacity, *goal_shape), dtype=np.float32)
+
+        self.goal_ctx_buf = [None] * capacity if self.store_context else None
+        self.next_goal_ctx_buf = [None] * capacity if self.store_context else None
         
         # Priority Structures
         self.sum_tree = SegmentTree(capacity, operation=lambda x, y: x + y, init_value=0.0)
         self.min_tree = SegmentTree(capacity, operation=min, init_value=float('inf'))
         self.max_priority = 1.0
 
-    def add(self, obs, action, reward, next_obs, done):
+    def add(self, obs, action, reward, next_obs, done, goal=None, next_goal=None, goal_ctx=None, next_goal_ctx=None):
         """Add a new experience to the buffer."""
         self.obs_buf[self.pos] = obs
         self.next_obs_buf[self.pos] = next_obs
         self.action_buf[self.pos] = action
         self.reward_buf[self.pos] = reward
         self.done_buf[self.pos] = float(done)
+
+        if self.goal_buf is not None:
+            if goal is None:
+                goal = np.zeros(self.goal_buf.shape[1:], dtype=np.float32)
+            if next_goal is None:
+                next_goal = goal
+            self.goal_buf[self.pos] = goal
+            self.next_goal_buf[self.pos] = next_goal
+
+        if self.store_context:
+            self.goal_ctx_buf[self.pos] = goal_ctx
+            self.next_goal_ctx_buf[self.pos] = next_goal_ctx if next_goal_ctx is not None else goal_ctx
         
         # New experiences get max priority to ensure they are seen at least once
         self.sum_tree.add(self.pos, self.max_priority ** self.alpha)
@@ -86,12 +109,14 @@ class PrioritizedReplayBuffer:
         if self.pos == 0:
             self.full = True
 
-    def sample(self, batch_size, beta=0.4):
+    def sample(self, batch_size, beta=0.4, include_goals=False, include_context=False):
         """
         Sample a batch of experiences.
         Args:
             batch_size (int): Number of samples.
             beta (float): Importance Sampling correction factor (0.4 -> 1.0 over training).
+            include_goals (bool): If True and goal buffers exist, also return goal tensors.
+            include_context (bool): If True and contexts are stored, return raw goal contexts.
         Returns:
             Tuple of Tensors + Indices + Weights
         """
@@ -122,7 +147,7 @@ class PrioritizedReplayBuffer:
             weights.append(weight / max_weight)
 
         indices = np.array(indices)
-        
+
         # Convert to Tensors on the correct device
         obs = torch.as_tensor(self.obs_buf[indices], dtype=torch.float32, device=self.device) / 255.0
         next_obs = torch.as_tensor(self.next_obs_buf[indices], dtype=torch.float32, device=self.device) / 255.0
@@ -130,8 +155,17 @@ class PrioritizedReplayBuffer:
         rewards = torch.as_tensor(self.reward_buf[indices], device=self.device)
         dones = torch.as_tensor(self.done_buf[indices], device=self.device)
         weights = torch.as_tensor(weights, dtype=torch.float32, device=self.device)
+        extras = ()
+        if include_goals and self.goal_buf is not None:
+            goal = torch.as_tensor(self.goal_buf[indices], dtype=torch.float32, device=self.device)
+            next_goal = torch.as_tensor(self.next_goal_buf[indices], dtype=torch.float32, device=self.device)
+            extras += (goal, next_goal)
+        if include_context and self.store_context:
+            goal_ctx = [self.goal_ctx_buf[idx] for idx in indices]
+            next_goal_ctx = [self.next_goal_ctx_buf[idx] for idx in indices]
+            extras += (goal_ctx, next_goal_ctx)
 
-        return obs, actions, rewards, next_obs, dones, weights, indices
+        return (obs, actions, rewards, next_obs, dones, weights, indices, *extras)
 
     def update_priorities(self, indices, priorities):
         """Update priorities after a training step based on TD-error."""

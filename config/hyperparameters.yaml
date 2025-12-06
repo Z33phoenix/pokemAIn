@@ -1,28 +1,163 @@
-director:
-  learning_rate: 0.0003
-  batch_size: 512
-  update_interval: 128
-
-specialists:
-  battle:
-    algorithm: beyond_the_rainbow
-    learning_rate: 0.0001
-    n_atoms: 51
-    v_min: -200
-    v_max: 200
-  navigation:
-    algorithm: crossq
-    learning_rate: 0.0001
-    q_branches: 8
-    gamma: 0.995
-
 environment:
-  frame_shape: [84, 84, 1]
-  action_repeat: 4
+  rom_path: pokemon_red.gb
+  state_path: states/initial.state
+  phase_states:
+    nav: states/nav   # directory of nav starting states (.state files)
+    battle: states/battle  # directory of battle-focused states
+    menu: states/menu  # directory of menu-focused states (can include no-menu scenarios)
+  headless: false
+  emulation_speed: 5
+  action_repeat: 24
+  release_frame: 8
   max_steps: 2048
+  window_title_debug: true
 
 training:
-  buffer_size: 200000
+  total_steps: 50000
+  warmup_steps: 1000
   batch_size: 32
-  gamma: 0.99
-  target_update: 1000
+  save_frequency: 2000
+  fast_update_frequency: 4
+  reward_clip: 5.0
+  epsilon:
+    start: 0.9
+    end: 0.05
+    decay: 50000
+  replay:
+    nav:
+      size: 100000
+      alpha: 0.2
+    battle:
+      size: 100000
+      alpha: 0.6
+    menu:
+      size: 100000 # Slightly smaller as menu interactions are faster/less varied
+      alpha: 0.5
+
+rewards:
+  step_penalty: -0.01
+  new_tile: 0.5
+  new_map: 2.0
+  wall_bump: -0.1
+  stale_penalty: -0.2
+  stale_threshold: 120
+  battle_loss_threshold: 0.1
+  heal_target: 0.9
+  # Updated Reward Weights to align with new Goals
+  catch_pokemon: 5.0    # High reward for expanding team (fits Explore/Train)
+  level_up: 10.0        # Massive reward for "Train" goal
+  battle_win: 5.0       # Explicit reward for winning
+  battle_loss: -5.0     # Penalty for blacking out
+  heal_success: 3.0     # Reward for successfully restoring HP (via item or center)
+  reward_clip: 10.0     # Increased clip to accommodate the higher level_up reward
+  menu:                  # Menu-specific shaping; keeps cursor moving toward the right entry
+    opened_menu: 1.0     # Bonus when entering any menu (bag/PC/party/START)
+    open_bonus: 0.2      # Small per-step bonus for staying inside a menu
+    cursor_move: 0.1
+    correct_target: 1.0
+    cursor_on_target: 0.5
+    stale_penalty: -0.1
+    stale_threshold: 48
+    reward_clip: 5.0
+
+director:
+  learning_rate: 0.0003
+  vision_learning_rate: 0.0001
+  update_interval: 128
+  num_specialists: 3
+  router_hidden_dim: 64
+  
+  # NEW: Goals are now "Self Quests" / Strategic Intents
+  goal_head_types:
+    - explore   # Focus: Uncovering the map
+    - train     # Focus: Leveling up and fighting
+    - survive   # Focus: Healing and Party Management
+    - menu      # Focus: Deterministic menu interactions (bag, party, options)
+
+  # Biases for the Director's initial exploration
+  goal_bias:
+    explore: 0.6
+    train: 0.3
+    survive: 0.1 # Should be reactive (triggered by low HP state)
+
+  # MAPPING: This links a Goal to a PRIMARY specialist.
+  # Note: Ideally, your Director code should allow dynamic switching, 
+  # but this sets the "default" brain for the goal.
+  goal_specialist_map:
+    explore: 0  # Navigation Brain
+    train: 1    # Battle Brain
+    survive: 2  # Menu Brain or Navigation Brain (if no potions or items)
+    menu: 2     # Explicit menu goal routing
+
+  # Definitions of what constitutes "Success" for the Director in these modes
+  goals:
+    explore:
+      priority: 0
+      novel_states: 10
+      max_steps: 2048
+      reward_focus: "new_tile"
+    
+    train:
+      priority: 10
+      xp_gained: 100       # Goal is satisfied after gaining X amount of XP
+      battles_won: 1       # Or winning a battle
+      max_steps: 1024
+      reward_focus: "level_up"
+
+    survive:
+      priority: 5
+      hp_threshold: 0.3    # Trigger this goal when HP < 30% - used as the signal-reward for the director to learn from
+      hp_target: 0.9       # Goal satisfied when HP > 90%
+      max_steps: 512
+      reward_focus: "heal_success"
+    menu:
+      max_steps: 128
+      priority: 5
+      menu_target: 0
+      cursor_row: 0
+      cursor_col: 0
+      menu_depth: 0
+      reward_focus: "menu"
+  
+  graph:
+    max_nodes: 5000
+    downsample_size: 8
+    quantization_step: 32
+
+specialists:
+  navigation:
+    learning_rate: 0.00001
+    gamma: 0.97
+    allowed_actions: [0, 1, 2, 3, 4, 5] # Arrows, A, B
+    
+  battle:
+    learning_rate: 0.0001
+    gamma: 0.99
+    allowed_actions: [0, 1, 2, 3, 4, 5] # Arrows, A, B
+    atoms: 51
+    v_min: -10
+    v_max: 10
+    
+  menu:
+    learning_rate: 0.000001
+    gamma: 0.95 # Lower gamma: Menu tasks are short-horizon (immediate effect)
+    hidden_dim: 256
+    goal_dim: 4
+    allowed_actions: [0, 1, 2, 3, 4, 5, 6] # Actions: Up, Down, Left, Right, A, B, Start
+    goal_encoding:
+      menu_target_scale: 8.0
+      cursor_row_scale: 8.0
+      cursor_col_scale: 8.0
+      depth_scale: 4.0
+      open_flag_value: 1.0
+      reward_weights:
+        correct_target: 1.0
+        cursor_on_target: 0.5
+        stale_penalty: -0.1
+        stale_threshold: 48
+        close_penalty: -0.1
+    goal_defaults:
+      menu_target: 0
+      cursor_row: 0
+      cursor_col: 0
+      menu_depth: 0

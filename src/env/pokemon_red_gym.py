@@ -1,5 +1,8 @@
 import io
 import os
+import random
+from typing import Any, Dict, List, Tuple
+
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
@@ -8,117 +11,179 @@ from pyboy.utils import WindowEvent
 
 from src.env import ram_map
 
+
 class PokemonRedGym(gym.Env):
     """
-    Gym Wrapper for Pokémon Red.
-    - Observation: 84x84 Grayscale Image (Visual).
-    - Action: Discrete(8) (Buttons).
-    - Info: RAM data (for Director/Graph only).
+    Minimal Gymnasium wrapper around PyBoy configured purely via YAML.
+
+    Observations are 84x84 grayscale frames, actions are discrete button presses,
+    and info dictionaries expose a handful of RAM-derived signals for the
+    Director and reward functions.
     """
-    
-    def __init__(self, rom_path='pokemon_red.gb', state_path='initial.state', headless=True, emulation_speed=0, max_steps=2048):
+
+    def __init__(self, config: Dict[str, Any]):
         super().__init__()
-        
-        window_backend = "headless" if headless else "SDL2"
-        self.pyboy = pyboy.PyBoy(rom_path, window=window_backend, sound_volume=0)
-        self.pyboy.set_emulation_speed(emulation_speed)
-        
-        # ... (Action/Release lists remain the same) ...
+        self.config = config
+        window_backend = "headless" if config.get("headless", True) else "SDL2"
+        self.pyboy = pyboy.PyBoy(
+            config.get("rom_path", "pokemon_red.gb"),
+            window=window_backend,
+            sound_volume=0,
+        )
+        self.pyboy.set_emulation_speed(config.get("emulation_speed", 1))
+
+        self.action_repeat = int(config.get("action_repeat", 24))
+        self.release_frame = int(config.get("release_frame", 8))
+        self.max_steps = int(config.get("max_steps", 2048))
+
         self.valid_actions = [
-            WindowEvent.PRESS_ARROW_DOWN, WindowEvent.PRESS_ARROW_LEFT, WindowEvent.PRESS_ARROW_RIGHT, WindowEvent.PRESS_ARROW_UP,
-            WindowEvent.PRESS_BUTTON_A, WindowEvent.PRESS_BUTTON_B, WindowEvent.PRESS_BUTTON_START
+            WindowEvent.PRESS_ARROW_DOWN,
+            WindowEvent.PRESS_ARROW_LEFT,
+            WindowEvent.PRESS_ARROW_RIGHT,
+            WindowEvent.PRESS_ARROW_UP,
+            WindowEvent.PRESS_BUTTON_A,
+            WindowEvent.PRESS_BUTTON_B,
+            WindowEvent.PRESS_BUTTON_START,
+            WindowEvent.PRESS_BUTTON_SELECT,
         ]
         self.release_actions = [
-            WindowEvent.RELEASE_ARROW_DOWN, WindowEvent.RELEASE_ARROW_LEFT, WindowEvent.RELEASE_ARROW_RIGHT, WindowEvent.RELEASE_ARROW_UP,
-            WindowEvent.RELEASE_BUTTON_A, WindowEvent.RELEASE_BUTTON_B, WindowEvent.RELEASE_BUTTON_START
+            WindowEvent.RELEASE_ARROW_DOWN,
+            WindowEvent.RELEASE_ARROW_LEFT,
+            WindowEvent.RELEASE_ARROW_RIGHT,
+            WindowEvent.RELEASE_ARROW_UP,
+            WindowEvent.RELEASE_BUTTON_A,
+            WindowEvent.RELEASE_BUTTON_B,
+            WindowEvent.RELEASE_BUTTON_START,
+            WindowEvent.RELEASE_BUTTON_SELECT,
         ]
         self.action_space = spaces.Discrete(len(self.valid_actions))
-        self.observation_space = spaces.Box(low=0, high=255, shape=(1, 84, 84), dtype=np.uint8)
+        self.observation_space = spaces.Box(
+            low=0, high=255, shape=(1, 84, 84), dtype=np.uint8
+        )
         self.memory = self.pyboy.memory
-        
-        # State Loading
-        self.state_path = state_path
-        if os.path.exists(self.state_path):
-            print(f"Loading initial state from {self.state_path}...")
-            with open(self.state_path, "rb") as f:
-                self.pyboy.load_state(f)
-        else:
-            print("No state file found. Starting fresh.")
-            for _ in range(40): self.pyboy.tick()
-        
-        self.reset_state_buffer = io.BytesIO()
-        self.pyboy.save_state(self.reset_state_buffer)
-        
-        # EPISODE MANAGEMENT
-        self.step_count = 0
-        self.max_steps = max_steps # Now configurable!
+        self.state_buffers: List[Tuple[str, io.BytesIO]] = []
 
-    def reset(self, seed=None, options=None):
+        default_state = os.path.join("states", "initial.state")
+        requested_path = config.get("state_path", default_state)
+        fallback_paths = [requested_path, default_state, "initial.state"]
+        candidate_states = self._collect_state_files(fallback_paths)
+
+        if candidate_states:
+            self.state_buffers = self._load_state_buffers(candidate_states)
+            initial_buffer = self._choose_reset_buffer()
+            if initial_buffer is not None:
+                self.pyboy.load_state(initial_buffer)
+        else:
+            # Burn a few frames so the BIOS screen passes.
+            for _ in range(40):
+                if not self.pyboy.tick():
+                    break
+
+        self.step_count = 0
+        self.window_closed = False
+
+    def reset(self, seed: int | None = None, options: Dict[str, Any] | None = None):
         super().reset(seed=seed)
-        
-        # RELOAD the initial state
-        self.reset_state_buffer.seek(0)
-        self.pyboy.load_state(self.reset_state_buffer)
-            
+        if self.window_closed:
+            raise RuntimeError("Cannot reset environment: PyBoy window is closed.")
+        self.step_count = 0
+        reset_buffer = self._choose_reset_buffer()
+        if reset_buffer is not None:
+            self.pyboy.load_state(reset_buffer)
         return self._get_obs(), self._get_info()
 
-    def step(self, action):
-        # 1. Perform Action
-        self.pyboy.send_input(self.valid_actions[action])
-        
-        # Run 24 frames (approx 0.4s real-time)
-        for i in range(24):
-            if i == 8: # Release button tap
-                self.pyboy.send_input(self.release_actions[action])
-            self.pyboy.tick()
+    def step(self, action: int):
+        if self.window_closed:
+            raise RuntimeError("PyBoy window has been closed by the user.")
 
-        # 2. Get Data
+        self.pyboy.send_input(self.valid_actions[action])
+        for i in range(self.action_repeat):
+            if i == self.release_frame:
+                self.pyboy.send_input(self.release_actions[action])
+            if not self.pyboy.tick():
+                self.window_closed = True
+                info = {"window_closed": True}
+                obs = self._get_obs()
+                return obs, 0.0, True, True, info
+
+        self.step_count += 1
         obs = self._get_obs()
         info = self._get_info()
-        
-        # 3. Calculate Reward (Placeholder until rewards.py is integrated)
-        reward = 0 
-        
+
         terminated = False
-        truncated = False
-        
+        truncated = self.step_count >= self.max_steps
+        reward = 0.0
         return obs, reward, terminated, truncated, info
 
     def _get_obs(self):
-        raw_screen = self.pyboy.screen.image 
-        gray = raw_screen.convert("L") 
+        raw_screen = self.pyboy.screen.image
+        gray = raw_screen.convert("L")
         resized = gray.resize((84, 84))
         return np.array(resized, dtype=np.uint8)[None, ...]
 
-    def _get_info(self):
-        # Read HP (Low byte first usually, but simplified here for 8-bit approximation or assuming helper exists)
-        # In Red, HP is 2 bytes. 
-        # 0xD16C = Current HP (High Byte), 0xD16D = Current HP (Low Byte)
-        # We will just grab the High byte for coarse estimation or implement a helper
-        
-        hp_current = self.memory[0xD16C] * 256 + self.memory[0xD16D]
-        hp_max = self.memory[0xD16E] * 256 + self.memory[0xD16F]
-        
-        hp_percent = 0.0
-        if hp_max > 0:
-            hp_percent = hp_current / hp_max
-
+    def _get_info(self) -> Dict[str, Any]:
+        hp_current, hp_max = ram_map.read_player_hp(self.memory)
+        pos_x, pos_y = ram_map.read_player_position(self.memory)
+        menu_open = ram_map.is_menu_open(self.memory)
+        menu_cursor = ram_map.read_menu_cursor(self.memory)
+        menu_target = ram_map.read_menu_target(self.memory)
+        menu_depth = ram_map.read_menu_depth(self.memory)
         return {
-            "map_id": self.memory[ram_map.MAP_N],
-            "x": self.memory[ram_map.X_POS],
-            "y": self.memory[ram_map.Y_POS],
-            "battle_active": self.memory[ram_map.BATTLE_TYPE] != 0,
-            "party_size": self.memory[ram_map.PARTY_SIZE],
-            # NEW FIELDS FOR DIRECTOR
-            "hp_percent": hp_percent,
+            "map_id": ram_map.read_map_id(self.memory),
+            "x": pos_x,
+            "y": pos_y,
+            "battle_active": ram_map.is_battle_active(self.memory),
+            "party_size": ram_map.read_party_size(self.memory),
+            "hp_percent": (hp_current / hp_max) if hp_max > 0 else 0.0,
             "hp_current": hp_current,
-            # 0xD018 is often used for battle type/status. 
-            # You might need to check your specific ram_map for "Player Status" (Poison/Burn)
-            # "status_ailment": self.memory[0xD16F] 
+            "hp_max": hp_max,
+            "menu_open": menu_open,
+            "menu_cursor": menu_cursor,
+            "menu_target": menu_target,
+            "menu_depth": menu_depth,
         }
 
-    def render(self):
-        pass
-        
     def close(self):
         self.pyboy.stop()
+
+    # ------------------------------------------------------------------ #
+    # State management helpers
+    # ------------------------------------------------------------------ #
+    def _collect_state_files(self, paths: List[str]) -> List[str]:
+        """Expand a list of files/directories into concrete .state file paths."""
+        seen = []
+        for path in paths:
+            if not path:
+                continue
+            if os.path.isdir(path):
+                for entry in os.listdir(path):
+                    full_path = os.path.join(path, entry)
+                    if os.path.isfile(full_path) and entry.lower().endswith(".state"):
+                        seen.append(full_path)
+            elif os.path.isfile(path):
+                seen.append(path)
+        # Preserve deterministic ordering while removing duplicates.
+        deduped = []
+        for p in seen:
+            if p not in deduped:
+                deduped.append(p)
+        return deduped
+
+    def _load_state_buffers(self, state_paths: List[str]) -> List[Tuple[str, io.BytesIO]]:
+        buffers: List[Tuple[str, io.BytesIO]] = []
+        for path in state_paths:
+            try:
+                with open(path, "rb") as f:
+                    data = f.read()
+                buffers.append((path, io.BytesIO(data)))
+            except Exception:
+                continue
+        return buffers
+
+    def _choose_reset_buffer(self) -> io.BytesIO | None:
+        """Return a BytesIO buffer for a randomly chosen state (or None if unavailable)."""
+        if not self.state_buffers:
+            return None
+        _, buffer = random.choice(self.state_buffers)
+        buffer.seek(0)
+        return buffer

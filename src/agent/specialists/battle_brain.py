@@ -1,8 +1,10 @@
+from typing import Any, Dict, Optional, Tuple
+
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import numpy as np
 import torch.nn.functional as F
+import torch.optim as optim
 
 class NoisyLinear(nn.Module):
     """
@@ -50,40 +52,32 @@ class NoisyLinear(nn.Module):
             return F.linear(input, self.weight_mu, self.bias_mu)
 
 class RainbowBattleAgent(nn.Module):
-    """
-    Battle Specialist using Distributional RL + Noisy Nets.
-    """
-    def __init__(self, input_dim=512, action_dim=8, lr=1e-4, gamma=0.99, atoms=51, v_min=-10, v_max=10):
+    """Distributional battle specialist with NoisyLinear exploration."""
+
+    def __init__(self, config: Dict[str, float], input_dim: int = 512):
         super().__init__()
-        self.action_dim = action_dim
-        self.gamma = gamma
-        self.atoms = atoms
-        self.v_min = v_min
-        self.v_max = v_max
-        # Register supports as buffer so it moves to GPU automatically
-        self.register_buffer("supports", torch.linspace(v_min, v_max, atoms))
-        
-        # 1. Feature Layer (Shared Input Processing)
-        self.feature_layer = nn.Sequential(
-            NoisyLinear(input_dim, 512),
-            nn.ReLU()
-        )
-        
-        # 2. Value Stream (State Value)
+        self.action_dim = config.get("action_dim", 8)
+        self.gamma = config.get("gamma", 0.99)
+        self.atoms = config.get("atoms", 51)
+        self.v_min = config.get("v_min", -10.0)
+        self.v_max = config.get("v_max", 10.0)
+        self.register_buffer("supports", torch.linspace(self.v_min, self.v_max, self.atoms))
+
+        self.feature_layer = nn.Sequential(NoisyLinear(input_dim, 512), nn.ReLU())
         self.value_stream = nn.Sequential(
             NoisyLinear(512, 128),
             nn.ReLU(),
-            NoisyLinear(128, atoms) 
+            NoisyLinear(128, self.atoms),
         )
-        
-        # 3. Advantage Stream (Action Advantage)
         self.advantage_stream = nn.Sequential(
             NoisyLinear(512, 128),
             nn.ReLU(),
-            NoisyLinear(128, action_dim * atoms) 
+            NoisyLinear(128, self.action_dim * self.atoms),
         )
-        
-        self.optimizer = optim.AdamW(self.parameters(), lr=lr)
+
+        self.optimizer = optim.AdamW(
+            self.parameters(), lr=config.get("learning_rate", 1e-4)
+        )
 
     def forward(self, features):
         """
@@ -100,7 +94,9 @@ class RainbowBattleAgent(nn.Module):
         
         return q_probs
 
-    def get_action(self, features):
+    def get_action(
+        self, features: torch.Tensor, goal: Optional[Dict[str, Any]] = None
+    ) -> int:
         """
         Selects action based on Expected Value (Mean of distribution).
         """
@@ -115,14 +111,20 @@ class RainbowBattleAgent(nn.Module):
             expected_value = (q_probs * self.supports).sum(dim=2)
             return torch.argmax(expected_value, dim=1).item()
 
-    def train_step_return_loss(self, features, actions, rewards, next_features, dones):
+    def train_step_return_loss(
+        self,
+        features: torch.Tensor,
+        actions: torch.Tensor,
+        rewards: torch.Tensor,
+        next_features: torch.Tensor,
+        dones: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
         Distributional RL Loss (C51 / Categorical).
         Returns LOSS TENSOR (for End-to-End Backprop).
         """
         batch_size = features.size(0)
-        
-        # 1. Calculate Target Distribution
+
         with torch.no_grad():
             next_probs = self.forward(next_features)
             next_expected = (next_probs * self.supports).sum(dim=2)
@@ -141,26 +143,18 @@ class RainbowBattleAgent(nn.Module):
             l = b.floor().long()
             u = b.ceil().long()
             
-            # Handle edge case where l == u (exact fit) by adding small epsilon or just clamping
-            # We fix the distribution projection:
             target_dist = torch.zeros_like(next_dist)
-            
-            # Vectorized projection
-            # We need to scatter the probabilities into the target bins
-            offset = torch.linspace(0, (batch_size - 1) * self.atoms, batch_size).long().unsqueeze(1).to(features.device)
-            
-            # This part is tricky in PyTorch without a loop, but here is the simplified C51 projection:
-            # Since strict C51 projection code is lengthy, we use the Soft-Project approximation 
-            # OR we assume the loop version for clarity if speed is not critical yet. 
-            # Below is a simplified "Expected Value MSE" fallback if C51 is too complex, 
-            # BUT let's stick to C51 logic roughly:
-            
             for i in range(batch_size):
                 for j in range(self.atoms):
-                    # Lower bound neighbor
-                    target_dist[i, l[i, j]] += next_dist[i, j] * (u[i, j].float() - b[i, j])
-                    # Upper bound neighbor
-                    target_dist[i, u[i, j]] += next_dist[i, j] * (b[i, j] - l[i, j].float())
+                    b_val = b[i, j].item()
+                    lower = int(torch.clamp(l[i, j], 0, self.atoms - 1).item())
+                    upper = int(torch.clamp(u[i, j], 0, self.atoms - 1).item())
+                    prob = next_dist[i, j]
+                    if lower == upper:
+                        target_dist[i, lower] += prob
+                    else:
+                        target_dist[i, lower] += prob * (upper - b_val)
+                        target_dist[i, upper] += prob * (b_val - lower)
 
         # 2. Prediction
         dist = self.forward(features)
@@ -169,5 +163,11 @@ class RainbowBattleAgent(nn.Module):
         # 3. Loss (KL Divergence / Cross Entropy)
         # We add 1e-6 to avoid log(0)
         loss = -torch.sum(target_dist * torch.log(action_dist + 1e-6)) / batch_size
-        
-        return loss
+        stats = {
+            "battle/loss": loss.item(),
+            "battle/entropy": -torch.sum(action_dist * torch.log(action_dist + 1e-6))
+            .detach()
+            .item()
+            / batch_size,
+        }
+        return loss, stats

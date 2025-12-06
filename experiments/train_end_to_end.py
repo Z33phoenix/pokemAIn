@@ -1,186 +1,372 @@
-import sys
+import argparse
 import os
+import random
+import sys
+from typing import Any, Dict, Tuple
+
+import numpy as np
 import torch
 import torch.optim as optim
-import numpy as np
 import yaml
 from tqdm import tqdm
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from src.agent.hierarchical_agent import HierarchicalAgent
 from src.env.pokemon_red_gym import PokemonRedGym
 from src.env.rewards import RewardSystem
-from src.agent.hierarchical_agent import HierarchicalAgent
-from src.utils.memory_buffer import PrioritizedReplayBuffer
 from src.utils.logger import Logger
+from src.utils.memory_buffer import PrioritizedReplayBuffer
 
-def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), "..", "config", "hyperparameters.yaml")
-    with open(config_path, "r") as f:
+
+def load_config(config_path: str | None = None) -> Dict[str, Any]:
+    if config_path is None:
+        config_path = os.path.join(os.path.dirname(__file__), "..", "config", "hyperparameters.yaml")
+    with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-def train():
-    cfg = load_config()
-    ENV_CFG = cfg['environment']
-    NAV_CFG = cfg['specialists']['navigation']
-    BAT_CFG = cfg['specialists']['battle']
-    TRN_CFG = cfg['training']
-    
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"--- STARTING TRAINING ON {DEVICE} ---")
 
-    # 1. SETUP
-    env = PokemonRedGym(
-        headless=False, 
-        emulation_speed=6,
-        max_steps=ENV_CFG['max_steps']
+def make_buffers(
+    cfg: Dict, device: torch.device, obs_shape: Tuple[int, ...]
+) -> Tuple[PrioritizedReplayBuffer, PrioritizedReplayBuffer, PrioritizedReplayBuffer]:
+    replay_cfg = cfg["training"]["replay"]
+    nav_cfg = replay_cfg["nav"]
+    battle_cfg = replay_cfg["battle"]
+    menu_cfg = replay_cfg["menu"]
+    menu_goal_dim = cfg.get("specialists", {}).get("menu", {}).get("goal_dim")
+    menu_goal_shape = (menu_goal_dim,) if menu_goal_dim else None
+    nav_buffer = PrioritizedReplayBuffer(nav_cfg["size"], obs_shape, alpha=nav_cfg["alpha"], device=device)
+    battle_buffer = PrioritizedReplayBuffer(battle_cfg["size"], obs_shape, alpha=battle_cfg["alpha"], device=device)
+    menu_buffer = PrioritizedReplayBuffer(
+        menu_cfg["size"],
+        obs_shape,
+        alpha=menu_cfg["alpha"],
+        device=device,
+        goal_shape=menu_goal_shape,
+        store_context=True,
     )
-    
-    reward_sys = RewardSystem()
-    
+    return nav_buffer, battle_buffer, menu_buffer
+
+
+def _apply_overrides(
+    cfg: Dict[str, Any], headless: bool | None, total_steps_override: int | None, state_path_override: str | None = None
+) -> Dict[str, Any]:
+    """Return a shallow-copied config with the requested overrides applied."""
+    cfg = cfg.copy()
+    if headless is not None:
+        env_cfg = cfg.get("environment", {}).copy()
+        env_cfg["headless"] = headless
+        cfg["environment"] = env_cfg
+    if state_path_override:
+        env_cfg = cfg.get("environment", {}).copy()
+        env_cfg["state_path"] = state_path_override
+        cfg["environment"] = env_cfg
+    if total_steps_override is not None:
+        training_cfg = cfg.get("training", {}).copy()
+        training_cfg["total_steps"] = total_steps_override
+        cfg["training"] = training_cfg
+    return cfg
+
+
+def _prepare_dirs(run_name: str | None, checkpoint_root: str, log_root: str) -> Tuple[str, str]:
+    checkpoint_dir = os.path.join(checkpoint_root, run_name) if run_name else checkpoint_root
+    log_dir = os.path.join(log_root, run_name) if run_name else log_root
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+    return checkpoint_dir, log_dir
+
+
+def _seed_everything(seed: int | None) -> int:
+    if seed is None:
+        seed = int(torch.randint(0, 10**6, (1,)).item())
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    return seed
+
+
+def train(
+    cfg: Dict[str, Any] | None = None,
+    config_path: str | None = None,
+    run_name: str | None = None,
+    checkpoint_root: str = "checkpoints",
+    log_root: str = "experiments/logs",
+    save_tag: str = "latest",
+    total_steps_override: int | None = None,
+    headless: bool | None = None,
+    state_path_override: str | None = None,
+    device_override: str | None = None,
+    seed: int | None = None,
+) -> Dict[str, Any]:
+    """
+    Run a single training job. Returns a small summary dict that can be used by
+    multi-agent orchestrators.
+    """
+    cfg = cfg or load_config(config_path)
+    cfg = _apply_overrides(
+        cfg,
+        headless=headless,
+        total_steps_override=total_steps_override,
+        state_path_override=state_path_override,
+    )
+    training_cfg = cfg["training"]
+    epsilon_cfg = training_cfg["epsilon"]
+
+    device = torch.device(device_override or ("cuda" if torch.cuda.is_available() else "cpu"))
+    seed = _seed_everything(seed)
+    print(f"--- STARTING TRAINING ON {device} ({'run ' + run_name if run_name else 'single'}) [seed={seed}] ---")
+
+    checkpoint_dir, log_dir = _prepare_dirs(run_name, checkpoint_root, log_root)
+
+    env = PokemonRedGym(cfg["environment"])
+    reward_sys = RewardSystem(cfg["rewards"])
     agent = HierarchicalAgent(
-        action_dim=env.action_space.n, 
-        device=DEVICE,
-        nav_lr=float(NAV_CFG['learning_rate']),
-        battle_lr=float(BAT_CFG['learning_rate'])
+        action_dim=env.action_space.n,
+        device=device,
+        director_cfg=cfg["director"],
+        specialist_cfg=cfg["specialists"],
     )
-    # Load Weights (Agent loads Director + Specialists)
-    agent.load(checkpoint_dir="checkpoints", tag="latest")
-    
-    # --- OPTIMIZER SETUP ---
-    # The Specialists have their own optimizers for their specialized layers.
-    # But who trains the Vision Encoder inside the Director?
-    # Strategy: We create a separate optimizer for the Encoder, 
-    # or we simply add the encoder params to the specialists' optimizers.
-    # Let's use a SHARED OPTIMIZER for the encoder for stability.
-    
-    vision_optimizer = optim.AdamW(
-        agent.director.vision.parameters(), 
-        lr=1e-4
-    )
-    
-    # Memory Buffers
-    # Note: We removed the Director Buffer. Logic doesn't need replay.
-    BUFFER_SIZE = TRN_CFG['buffer_size']
-    nav_buffer = PrioritizedReplayBuffer(BUFFER_SIZE, (1, 84, 84), alpha=0.2, device=DEVICE)
-    battle_buffer = PrioritizedReplayBuffer(BUFFER_SIZE, (1, 84, 84), alpha=0.6, device=DEVICE)
+    agent.load(checkpoint_dir=checkpoint_dir, tag=save_tag)
 
-    logger = Logger()
-    
-    # Params
-    TOTAL_STEPS = 5_000_000
-    BATCH_SIZE = TRN_CFG['batch_size']
-    SAVE_FREQ = 2_000
-    FAST_FREQ = 4
-    
-    epsilon = 1.0
-    EPSILON_END = 0.05
-    EPSILON_DECAY = 100_000 
-    
-    # 2. TRAINING LOOP
+    vision_optimizer = optim.AdamW(
+        agent.director.encoder.parameters(), lr=cfg["director"].get("vision_learning_rate", 1e-4)
+    )
+
+    nav_buffer, battle_buffer, menu_buffer = make_buffers(cfg, device, env.observation_space.shape)
+    logger = Logger(log_dir=log_dir, run_name=run_name)
+
+    total_steps = training_cfg["total_steps"]
+    save_freq = training_cfg["save_frequency"]
+    fast_freq = training_cfg["fast_update_frequency"]
+    warmup = training_cfg["warmup_steps"]
+    batch_size = training_cfg["batch_size"]
+
+    epsilon = epsilon_cfg["start"]
+    epsilon_end = epsilon_cfg["end"]
+    epsilon_decay = epsilon_cfg["decay"]
+
     obs, info = env.reset()
     reward_sys.reset()
-    
-    episode_reward = 0
-    pbar = tqdm(range(1, TOTAL_STEPS + 1))
-    
+    episode_reward = 0.0
+
+    best_episode_reward = float("-inf")
+    best_nav_loss = float("inf")
+    best_battle_loss = float("inf")
+    best_menu_loss = float("inf")
+
+    pbar = tqdm(range(1, total_steps + 1))
+
     for step in pbar:
-        # --- A. SELECT ACTION ---
-        # The Director Logic runs inside get_action
-        action, specialist_idx = agent.get_action(obs, info, epsilon)
-        
-        # --- B. EXECUTE ---
+        action, specialist_idx, action_meta = agent.get_action(obs, info, epsilon)
         next_obs, _, terminated, truncated, next_info = env.step(action)
-        ram_reward = reward_sys.compute_reward(next_info, env.pyboy.memory, next_obs, action)
-        
+        goal_ctx = action_meta.get("goal")
+        reward_components = reward_sys.compute_components(
+            next_info, env.pyboy.memory, next_obs, action, goal_ctx=goal_ctx
+        )
+        nav_total_reward = reward_components["global_reward"] + reward_components["nav_reward"]
+        battle_total_reward = reward_components["global_reward"] + reward_components["battle_reward"]
+        menu_total_reward = reward_components["global_reward"] + reward_components["menu_reward"]
+        nav_total_reward = float(
+            np.clip(nav_total_reward, -training_cfg.get("reward_clip", np.inf), training_cfg.get("reward_clip", np.inf))
+        )
+        battle_total_reward = float(
+            np.clip(
+                battle_total_reward,
+                -training_cfg.get("reward_clip", np.inf),
+                training_cfg.get("reward_clip", np.inf),
+            )
+        )
+        menu_total_reward = float(
+            np.clip(
+                menu_total_reward,
+                -training_cfg.get("reward_clip", np.inf),
+                training_cfg.get("reward_clip", np.inf),
+            )
+        )
+        goal_embedding = action_meta.get("goal_embedding")
+        goal_embedding_np = (
+            goal_embedding.detach().cpu().numpy().squeeze(0) if goal_embedding is not None else None
+        )
+
         done = terminated or truncated
-        episode_reward += ram_reward
-
-        # --- C. STORE ---
-        # Store based on who was active
         if specialist_idx == 0:
-            nav_buffer.add(obs, action, ram_reward, next_obs, done)
+            episode_reward += nav_total_reward
         elif specialist_idx == 1:
-            battle_buffer.add(obs, action, ram_reward, next_obs, done)
+            episode_reward += battle_total_reward
+        else:
+            episode_reward += menu_total_reward
 
-        # --- D. TRAIN ---
-        if step > 1000 and step % FAST_FREQ == 0:
-            metrics = {}
-            
-            # --- TRAIN NAVIGATION ---
-            if len(nav_buffer) > BATCH_SIZE:
-                s, a, r, ns, d, w, idx = nav_buffer.sample(BATCH_SIZE)
-                
-                # 1. Forward Pass through Shared Encoder
-                # We do this here so we can capture gradients for the encoder
-                s_feat = agent.director.vision(s)
-                ns_feat = agent.director.vision(ns)
-                
-                # 2. Specialist Loss
-                # Note: You need to modify NavAgent.train_step to return LOSS only, not step optimizer
-                # Or use a custom update routine here:
-                
-                # Get Q-values/Loss from Nav Brain
-                nav_loss, stats = agent.nav_brain.train_step_return_loss(s_feat, a, r, ns_feat, d)
-                
-                # 3. Backprop (End-to-End)
+        local_action = action_meta.get("local_action")
+        if local_action is None:
+            raise ValueError("Missing local action for specialist index {}".format(specialist_idx))
+        if specialist_idx == 0:
+            nav_buffer.add(obs, local_action, nav_total_reward, next_obs, done)
+        elif specialist_idx == 1:
+            battle_buffer.add(obs, local_action, battle_total_reward, next_obs, done)
+        else:
+            menu_buffer.add(
+                obs,
+                local_action,
+                menu_total_reward,
+                next_obs,
+                done,
+                goal=goal_embedding_np,
+                next_goal=goal_embedding_np,
+                goal_ctx=goal_ctx,
+                next_goal_ctx=goal_ctx,
+            )
+
+        if step > warmup and step % fast_freq == 0:
+            metrics: Dict[str, float] = {}
+
+            if len(nav_buffer) > batch_size:
+                s, a, r, ns, d, w, idx = nav_buffer.sample(batch_size)
+                s_feat = agent.director.encoder(s)
+                ns_feat = agent.director.encoder(ns)
+                nav_loss, nav_stats = agent.nav_brain.train_step_return_loss(s_feat, a, r, ns_feat, d)
+
                 vision_optimizer.zero_grad()
                 agent.nav_brain.optimizer.zero_grad()
-                
                 nav_loss.backward()
-                
-                # 4. Step Both Optimizers
                 vision_optimizer.step()
                 agent.nav_brain.optimizer.step()
-                
-                nav_buffer.update_priorities(idx, [nav_loss.item() + 1e-5] * BATCH_SIZE)
-                metrics['loss/nav'] = nav_loss.item()
 
-            # --- TRAIN BATTLE ---
-            if len(battle_buffer) > BATCH_SIZE:
-                s, a, r, ns, d, w, idx = battle_buffer.sample(BATCH_SIZE)
-                
-                s_feat = agent.director.vision(s)
-                ns_feat = agent.director.vision(ns)
-                
-                battle_loss = agent.battle_brain.train_step_return_loss(s_feat, a, r, ns_feat, d)
-                
+                nav_buffer.update_priorities(idx, [nav_loss.item() + 1e-5] * batch_size)
+                metrics.update(nav_stats)
+                if nav_loss.item() < best_nav_loss:
+                    best_nav_loss = nav_loss.item()
+                    agent.save_component("nav", checkpoint_dir=checkpoint_dir, tag="best_nav")
+
+            if len(battle_buffer) > batch_size:
+                s, a, r, ns, d, w, idx = battle_buffer.sample(batch_size)
+                s_feat = agent.director.encoder(s)
+                ns_feat = agent.director.encoder(ns)
+                battle_loss, battle_stats = agent.battle_brain.train_step_return_loss(s_feat, a, r, ns_feat, d)
+
                 vision_optimizer.zero_grad()
                 agent.battle_brain.optimizer.zero_grad()
-                
                 battle_loss.backward()
-                
                 vision_optimizer.step()
                 agent.battle_brain.optimizer.step()
-                
-                battle_buffer.update_priorities(idx, [battle_loss.item() + 1e-5] * BATCH_SIZE)
-                metrics['loss/battle'] = battle_loss.item()
 
-            # Log Metrics
-            metrics['policy/epsilon'] = epsilon
-            metrics.update(agent.director.blackboard.__dict__) # Log Blackboard state
-            if len(metrics) > 0:
+                battle_buffer.update_priorities(idx, [battle_loss.item() + 1e-5] * batch_size)
+                metrics.update(battle_stats)
+                if battle_loss.item() < best_battle_loss:
+                    best_battle_loss = battle_loss.item()
+                    agent.save_component("battle", checkpoint_dir=checkpoint_dir, tag="best_battle")
+
+            if len(menu_buffer) > batch_size:
+                sample = menu_buffer.sample(batch_size, include_context=True)
+                s, a, r, ns, d, w, idx, gctx, ngctx = sample
+                s_feat = agent.director.encoder(s)
+                ns_feat = agent.director.encoder(ns)
+                goal_embed = agent.menu_brain.encode_goal_batch(gctx, device=device)
+                next_goal_embed = agent.menu_brain.encode_goal_batch(ngctx, device=device)
+                menu_loss, menu_stats = agent.menu_brain.train_step(
+                    s_feat, goal_embed, a, r, ns_feat, next_goal_embed, d
+                )
+
+                vision_optimizer.zero_grad()
+                agent.menu_brain.optimizer.zero_grad()
+                menu_loss.backward()
+                vision_optimizer.step()
+                agent.menu_brain.optimizer.step()
+
+                menu_buffer.update_priorities(idx, [menu_loss.item() + 1e-5] * batch_size)
+                metrics.update(menu_stats)
+                if menu_loss.item() < best_menu_loss:
+                    best_menu_loss = menu_loss.item()
+                    agent.save_component("menu", checkpoint_dir=checkpoint_dir, tag="best_menu")
+
+            metrics["policy/epsilon"] = epsilon
+            metrics["buffer/nav_fill"] = len(nav_buffer) / training_cfg["replay"]["nav"]["size"]
+            metrics["buffer/battle_fill"] = len(battle_buffer) / training_cfg["replay"]["battle"]["size"]
+            metrics["buffer/menu_fill"] = len(menu_buffer) / training_cfg["replay"]["menu"]["size"]
+            metrics.update(agent.director.get_goal_metrics())
+
+            if metrics:
                 logger.log_step(metrics, step)
 
-        # --- E. UPDATE & RESET ---
         obs = next_obs
         info = next_info
-        
-        if epsilon > EPSILON_END:
-            epsilon -= (1.0 - EPSILON_END) / EPSILON_DECAY
 
-        pbar.set_description(f"Rew: {episode_reward:.2f} | Goal: {agent.director.current_goal}")
+        if epsilon > epsilon_end:
+            epsilon -= (epsilon_cfg["start"] - epsilon_end) / epsilon_decay
+
+        specialist_name = "Nav" if specialist_idx == 0 else ("Bat" if specialist_idx == 1 else "Menu")
+        goal_name = action_meta.get("goal", {}).get("goal_type", "none")
+        pbar.set_description(
+            f"[{run_name or 'solo'}] Rew: {episode_reward:.2f} | Eps: {epsilon:.2f} | {specialist_name} -> {goal_name}"
+        )
 
         if done:
-            episode_reward = 0
+            if episode_reward > best_episode_reward:
+                best_episode_reward = episode_reward
+                agent.save(checkpoint_dir, tag="best_reward")
+            episode_reward = 0.0
             obs, info = env.reset()
             reward_sys.reset()
-            
-        if step % SAVE_FREQ == 0:
-            agent.save("checkpoints", tag="latest")
 
+        if step % save_freq == 0:
+            agent.save(checkpoint_dir, tag=save_tag)
+
+    agent.save(checkpoint_dir, tag=save_tag)
     logger.close()
     env.close()
+    return {
+        "run_name": run_name or "solo",
+        "checkpoint_dir": checkpoint_dir,
+        "log_dir": logger.log_dir,
+        "best_episode_reward": best_episode_reward,
+        "best_nav_loss": best_nav_loss,
+        "best_battle_loss": best_battle_loss,
+        "best_menu_loss": best_menu_loss,
+        "seed": seed,
+    }
+
 
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser(description="Train a single hierarchical agent.")
+    parser.add_argument("--config", type=str, default=None, help="Path to a hyperparameter YAML file.")
+    parser.add_argument("--run-name", type=str, default=None, help="Optional run name (used for dirs/logging).")
+    parser.add_argument("--checkpoint-root", type=str, default="checkpoints", help="Base directory for checkpoints.")
+    parser.add_argument("--log-root", type=str, default="experiments/logs", help="Base directory for TensorBoard logs.")
+    parser.add_argument("--save-tag", type=str, default="latest", help="Tag used when saving checkpoints.")
+    parser.add_argument("--total-steps", type=int, default=None, help="Override total training steps from config.")
+    parser.add_argument(
+        "--headless",
+        dest="headless",
+        action="store_true",
+        help="Force PyBoy to run headless regardless of config.",
+    )
+    parser.add_argument(
+        "--windowed",
+        dest="headless",
+        action="store_false",
+        help="Force PyBoy to create a window regardless of config.",
+    )
+    parser.set_defaults(headless=None)
+    parser.add_argument(
+        "--state-path",
+        type=str,
+        default=None,
+        help="Override environment state path (useful for phased training).",
+    )
+    parser.add_argument("--device", type=str, default=None, help="Override torch device, e.g., cpu or cuda:0.")
+    parser.add_argument("--seed", type=int, default=None, help="Optional random seed.")
+
+    args = parser.parse_args()
+    train(
+        config_path=args.config,
+        run_name=args.run_name,
+        checkpoint_root=args.checkpoint_root,
+        log_root=args.log_root,
+        save_tag=args.save_tag,
+        total_steps_override=args.total_steps,
+        headless=args.headless,
+        state_path_override=args.state_path,
+        device_override=args.device,
+        seed=args.seed,
+    )
