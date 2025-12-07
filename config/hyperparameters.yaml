@@ -83,6 +83,25 @@ rewards:
     scale: 0.01            # Normalize raw menu rewards (divide by 100)
     reward_clip: 1.0
 
+    # Tiny-RL menu economics and mart configuration (menu-tiny-rl branch only).
+    # mart_maps: optional list of map ids (D35E) that should be treated as Poké Marts.
+    # If empty or omitted, the trainer falls back to RAM heuristics (CF7B) to
+    # detect when a mart inventory is active instead of assuming every map.
+    mart_maps: [42]   # Default to Pallet Town mart so start_in_mart is only true there.
+    economy:
+      step_penalty: -0.01           # Base per-step penalty
+      open_menu_bonus: 0.5          # Reward when menu opens from closed state
+      cursor_on_target_bonus: 0.2   # Bonus when cursor is on the sampled target index
+      close_penalty: -1.0           # Penalty when menu closes without success
+
+      buy_item_scale: 0.1           # Scaling for rewarding Poké Ball / Potion gains
+      buy_item_cap: 0.5             # Cap on buy reward per transition
+      sell_nugget_scale: 0.1        # Scaling for rewarding Nugget sales
+      sell_nugget_cap: 0.5          # Cap on Nugget sale reward per transition
+
+      low_money_threshold: 2000     # Soft floor for “don’t go broke” shaping
+      low_money_penalty: 0.05       # Penalty applied each step when money < threshold
+
 # =============================================================================
 # Director
 # =============================================================================
@@ -134,7 +153,6 @@ director:
       menu_target: 0
       cursor_row: 0
       cursor_col: 0
-      menu_depth: 0
       reward_focus: "menu"
 
   graph:
@@ -166,7 +184,6 @@ specialists:
       menu_target_scale: 8.0
       cursor_row_scale: 8.0
       cursor_col_scale: 8.0
-      depth_scale: 4.0
       open_flag_value: 1.0
       reward_weights:
         correct_target: 1.0
@@ -178,4 +195,3 @@ specialists:
       menu_target: 0
       cursor_row: 0
       cursor_col: 0
-      menu_depth: 0

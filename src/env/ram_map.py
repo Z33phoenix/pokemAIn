@@ -5,7 +5,7 @@ This module is the single source of truth for every RAM lookup made by the
 environment, rewards, and director logic. Always go through the helpers below
 instead of scattering numeric addresses throughout the codebase.
 """
-from typing import Tuple, Optional
+from typing import Tuple
 
 # -----------------------------------------------------------------------------
 # Player + Party Offsets
@@ -48,9 +48,35 @@ MENU_SELECT_HIGHLIGHT = 0xCC35       # Item highlighted with Select (01=first, 0
 MENU_FIRST_DISPLAYED_ITEM_ID = 0xCC36  # ID of first displayed menu item
 
 # -----------------------------------------------------------------------------
+# Poké Mart inventory block (DataCrystal "Pokémon Mart" section)
+# -----------------------------------------------------------------------------
+MART_TOTAL_ITEMS = 0xCF7B
+MART_ITEMS_START = 0xCF7C
+MART_MAX_ITEMS = 10
+
+# -----------------------------------------------------------------------------
 # Experience / Progression
 # -----------------------------------------------------------------------------
 EXP_FIRST_MON = 0xD179  # 3 bytes (big endian)
+
+# -----------------------------------------------------------------------------
+# Bag Items + Money (from DataCrystal Items / Money sections)
+# https://datacrystal.tcrf.net/wiki/Pok%C3%A9mon_Red_and_Blue/RAM_map#Items
+# -----------------------------------------------------------------------------
+ITEMS_TOTAL = 0xD31D
+ITEMS_START = 0xD31E  # Item 1 id; then quantity, then item 2 id, ... up to D345
+ITEMS_END_MARKER = 0xD346
+
+MONEY_BCD_1 = 0xD347  # Money Byte 1 (hundred-thousands / ten-thousands)
+MONEY_BCD_2 = 0xD348  # Money Byte 2 (thousands / hundreds)
+MONEY_BCD_3 = 0xD349  # Money Byte 3 (tens / ones)
+
+# Known item IDs (Gen 1 internal ids) used for shaping in menu RL.
+# These are kept small/specific so higher-level code doesn't depend on a full
+# item table here.
+ITEM_ID_POKE_BALL = 0x04
+ITEM_ID_POTION = 0x14
+ITEM_ID_NUGGET = 0x31
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -105,6 +131,61 @@ def read_first_mon_exp(memory) -> int:
     )
 
 
+def read_money(memory) -> int:
+    """Return the player's current money as an integer.
+
+    Money is stored as 3 bytes of packed BCD (D347-D349) representing a value
+    in the range [0, 999999]. Each nibble is a decimal digit.
+    """
+    b1 = memory[MONEY_BCD_1]
+    b2 = memory[MONEY_BCD_2]
+    b3 = memory[MONEY_BCD_3]
+    digits = [
+        (b1 >> 4) & 0xF,
+        b1 & 0xF,
+        (b2 >> 4) & 0xF,
+        b2 & 0xF,
+        (b3 >> 4) & 0xF,
+        b3 & 0xF,
+    ]
+    value = 0
+    for d in digits:
+        if d > 9:
+            # Guard against invalid BCD; clamp digit.
+            d = 9
+        value = value * 10 + d
+    return value
+
+
+def read_bag_items(memory) -> list[tuple[int, int]]:
+    """Return a list of (item_id, quantity) tuples from the player's bag.
+
+    The bag layout is a simple flat list: total count at D31D, then repeatingn    (id, quantity) pairs until the end marker at D346.
+    """
+    total = memory[ITEMS_TOTAL]
+    items: list[tuple[int, int]] = []
+    addr = ITEMS_START
+    for _ in range(total):
+        if addr >= ITEMS_END_MARKER:
+            break
+        item_id = memory[addr]
+        qty = memory[addr + 1]
+        if item_id == 0xFF:
+            break
+        items.append((int(item_id), int(qty)))
+        addr += 2
+    return items
+
+
+def count_item_in_bag(memory, item_id: int) -> int:
+    """Return the total quantity of a specific item id in the bag."""
+    total = 0
+    for iid, qty in read_bag_items(memory):
+        if iid == item_id:
+            total += qty
+    return total
+
+
 # -----------------------------------------------------------------------------
 # Menu helpers
 # -----------------------------------------------------------------------------
@@ -149,9 +230,25 @@ def read_menu_target(memory) -> int:
     return read_current_menu_item(memory)
 
 
-def read_menu_depth(memory) -> Optional[int]:
+def is_mart_inventory_active(memory) -> bool:
     """
-    Depth is not exposed in the known offsets; return None to keep callers
-    explicit about the absence of this signal.
+    Returns True when the Poké Mart inventory buffer (CF7B+) is populated.
+
+    DataCrystal documents CF7B as the "Total Items" field for whatever mart
+    script is currently active, followed by up to 10 item ids. Outside of a
+    mart interaction this field is zeroed, so we can rely on it to detect
+    whether the agent is shopping without hard-coding map ids.
     """
-    return None
+    total = memory[MART_TOTAL_ITEMS]
+    if total == 0 or total == 0xFF:
+        return False
+    total = min(int(total), MART_MAX_ITEMS)
+    first_item = memory[MART_ITEMS_START]
+    if first_item in (0x00, 0xFF):
+        return False
+    # Ensure the buffer actually contains that many entries.
+    for i in range(total):
+        item = memory[MART_ITEMS_START + i]
+        if item == 0xFF:
+            return i > 0
+    return True

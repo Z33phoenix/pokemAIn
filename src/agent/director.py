@@ -234,7 +234,6 @@ class Director(nn.Module):
             target={
                 "menu_target": info.get("menu_target", goal_cfg.get("menu_target")),
                 "cursor": target_cursor,
-                "menu_depth": info.get("menu_depth", goal_cfg.get("menu_depth")),
             },
             metadata={"behavior": "menu"},
             max_steps=goal_cfg.get("max_steps", 0),

@@ -70,7 +70,6 @@ def _menu_goal_ctx(info: Dict[str, Any], menu_goal_defaults: Dict[str, Any]) -> 
             # current RAM-selected item.
             "menu_target": menu_goal_defaults.get("menu_target"),
             "cursor": target_cursor,
-            "menu_depth": menu_goal_defaults.get("menu_depth"),
         },
         "metadata": {"menu_open": _menu_active(info)},
     }

@@ -7,7 +7,7 @@ from pyboy.utils import WindowEvent
 from src.agent.director import Director
 from src.agent.specialists.nav_brain import CrossQNavAgent
 from src.agent.specialists.battle_brain import CrossQBattleAgent
-from src.agent.specialists.menu_brain import MenuBrain
+from src.agent.specialists.menu_tiny_rl import TinyMenuAgent
 
 
 WINDOW_EVENT_TO_ACTION_ID = {
@@ -55,20 +55,37 @@ class HierarchicalAgent:
             act: idx for idx, act in enumerate(self.menu_actions)
         }
 
+        # Map abstract tiny-menu actions [UP, DOWN, CONFIRM, CANCEL] to local
+        # action indices in the environment's discrete space.
+        self.menu_abstract_to_local: dict[int, int] = {}
+        up_id = WINDOW_EVENT_TO_ACTION_ID.get(WindowEvent.PRESS_ARROW_UP)
+        down_id = WINDOW_EVENT_TO_ACTION_ID.get(WindowEvent.PRESS_ARROW_DOWN)
+        confirm_id = WINDOW_EVENT_TO_ACTION_ID.get(WindowEvent.PRESS_BUTTON_A)
+        cancel_id = WINDOW_EVENT_TO_ACTION_ID.get(WindowEvent.PRESS_BUTTON_B)
+        if up_id is not None and up_id in self.menu_action_lookup:
+            self.menu_abstract_to_local[0] = self.menu_action_lookup[up_id]
+        if down_id is not None and down_id in self.menu_action_lookup:
+            self.menu_abstract_to_local[1] = self.menu_action_lookup[down_id]
+        if confirm_id is not None and confirm_id in self.menu_action_lookup:
+            self.menu_abstract_to_local[2] = self.menu_action_lookup[confirm_id]
+        if cancel_id is not None and cancel_id in self.menu_action_lookup:
+            self.menu_abstract_to_local[3] = self.menu_action_lookup[cancel_id]
+
         self.nav_brain = CrossQNavAgent(nav_cfg).to(self.device)
         self.battle_brain = CrossQBattleAgent(battle_cfg).to(self.device)
-        self.menu_brain = MenuBrain(menu_cfg).to(self.device)
+        self.menu_brain = TinyMenuAgent().to(self.device)
         self.menu_open_action = self._resolve_menu_open_action()
         self.action_dim = action_dim
 
     def _zero_goal_embedding(self, dim: int) -> torch.Tensor:
+        # Kept for backwards compatibility; not used by TinyMenuAgent.
         return torch.zeros((1, dim), device=self.device)
 
     def _encode_menu_goal(self, goal_ctx: Optional[Dict[str, Any]]) -> torch.Tensor:
-        """Normalize menu goal context into an embedding for the specialist."""
+        """Legacy helper for goal-conditioned menu policies (unused here)."""
         if goal_ctx is None:
-            return self._zero_goal_embedding(self.menu_brain.goal_dim)
-        return self.menu_brain.encode_goal(goal_ctx, device=self.device)
+            return torch.zeros((1, 1), device=self.device)
+        return torch.zeros((1, 1), device=self.device)
 
     @staticmethod
     def _info_menu_active(info: Dict[str, Any]) -> bool:
@@ -114,6 +131,11 @@ class HierarchicalAgent:
             action = self.battle_actions[local_action]
             action_meta["local_action"] = local_action
         else:
+            # Menu specialist: use TinyMenuAgent over RAM features instead of
+            # the CNN-based MenuBrain. We still propagate goal_ctx so the
+            # reward system can use it for shaping, but the tiny agent only
+            # cares about the target index.
+            target_index = 0
             if goal_ctx and goal_ctx.get("goal_type") == "menu":
                 goal_ctx = goal_ctx.copy()
                 goal_ctx.setdefault("metadata", {})
@@ -123,20 +145,46 @@ class HierarchicalAgent:
                     target = target.copy()
                     target["cursor"] = info.get("menu_cursor")
                     goal_ctx["target"] = target
+                # Use any configured menu_target as the desired index.
+                if "menu_target" in target and target["menu_target"] is not None:
+                    target_index = int(target["menu_target"])
                 action_meta["goal"] = goal_ctx
-            goal_embedding = self._encode_menu_goal(goal_ctx)
-            menu_open = self._info_menu_active(info)
-            open_idx = self.menu_open_action
-            local_action = self.menu_brain.get_action(
-                features,
-                goal_embedding,
-                epsilon=min(epsilon, 0.2),
-                menu_open=menu_open,
-                open_action_index=open_idx,
-            )
-            action = self.menu_actions[local_action]
-            action_meta["local_action"] = local_action
-            action_meta["goal_embedding"] = goal_embedding.detach()
+
+            # Fallback: if no explicit target, use current index or 0.
+            if target_index is None:
+                target_index = int(info.get("menu_target", 0) or 0)
+
+            # Encode compact RAM state and query TinyMenuAgent.
+            state_vec = self.menu_brain.encode_state(info, target_index)
+            tiny_action = self.menu_brain.act(state_vec, epsilon=min(epsilon, 0.2))
+
+            # Map abstract tiny action to a WindowEvent, using START to open
+            # menus when we are not currently in one.
+            from pyboy.utils import WindowEvent  # local import to avoid cycles
+
+            menu_active_now = self._info_menu_active(info)
+            if menu_active_now:
+                abstract_to_window = {
+                    0: WindowEvent.PRESS_ARROW_UP,
+                    1: WindowEvent.PRESS_ARROW_DOWN,
+                    2: WindowEvent.PRESS_BUTTON_A,
+                    3: WindowEvent.PRESS_BUTTON_B,
+                }
+            else:
+                abstract_to_window = {
+                    0: WindowEvent.PRESS_ARROW_UP,
+                    1: WindowEvent.PRESS_ARROW_DOWN,
+                    2: WindowEvent.PRESS_BUTTON_START,
+                    3: WindowEvent.PRESS_BUTTON_B,
+                }
+            window_event = abstract_to_window.get(tiny_action, WindowEvent.PRESS_BUTTON_A)
+
+            # Convert WindowEvent to global env action id via WINDOW_EVENT_TO_ACTION_ID.
+            env_action_id = WINDOW_EVENT_TO_ACTION_ID.get(window_event, 4)
+            action = env_action_id
+            # local_action is not used by TinyMenuAgent's training; we record the
+            # abstract action index for compatibility with existing metadata.
+            action_meta["local_action"] = tiny_action
         return action, specialist_idx, action_meta
 
     def save(self, checkpoint_dir: str = "checkpoints", tag: str = "latest"):

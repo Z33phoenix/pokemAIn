@@ -57,7 +57,6 @@ class MenuBrain(nn.Module):
         target_scale = self.goal_encoding_cfg.get("menu_target_scale", 1.0) or 1.0
         row_scale = self.goal_encoding_cfg.get("cursor_row_scale", 1.0) or 1.0
         col_scale = self.goal_encoding_cfg.get("cursor_col_scale", 1.0) or 1.0
-        depth_scale = self.goal_encoding_cfg.get("depth_scale", 1.0) or 1.0
         open_value = self.goal_encoding_cfg.get("open_flag_value", 1.0)
 
         for i, ctx in enumerate(goals):
@@ -71,17 +70,14 @@ class MenuBrain(nn.Module):
                     self.goal_defaults.get("cursor_row"),
                     self.goal_defaults.get("cursor_col"),
                 )
-            menu_depth = target.get("menu_depth", self.goal_defaults.get("menu_depth"))
             if menu_target is not None:
                 goal_vec[i, 0] = float(menu_target) / target_scale
             if self.goal_dim > 1 and cursor is not None and cursor[0] is not None:
                 goal_vec[i, 1] = float(cursor[0]) / row_scale
             if self.goal_dim > 2 and cursor is not None and cursor[1] is not None:
                 goal_vec[i, 2] = float(cursor[1]) / col_scale
-            if self.goal_dim > 3 and menu_depth is not None:
-                goal_vec[i, 3] = float(menu_depth) / depth_scale
-            if self.goal_dim > 4 and ctx.get("metadata", {}).get("menu_open"):
-                goal_vec[i, 4] = float(open_value)
+            if self.goal_dim > 3 and ctx.get("metadata", {}).get("menu_open"):
+                goal_vec[i, 3] = float(open_value)
         return goal_vec
 
     def encode_goal(

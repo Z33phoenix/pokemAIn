@@ -130,11 +130,9 @@ class PokemonRedGym(gym.Env):
         pos_x, pos_y = ram_map.read_player_position(self.memory)
         menu_last_index = ram_map.read_last_menu_item(self.memory)
         menu_has_options = menu_last_index > 0
-        menu_open_flag = ram_map.is_menu_open(self.memory)
-        menu_open = bool(menu_open_flag)
+        menu_open = ram_map.is_menu_open(self.memory)
         menu_cursor = ram_map.read_menu_cursor(self.memory)
         menu_target = ram_map.read_menu_target(self.memory)
-        menu_depth = ram_map.read_menu_depth(self.memory)
         return {
             "map_id": ram_map.read_map_id(self.memory),
             "x": pos_x,
@@ -150,7 +148,6 @@ class PokemonRedGym(gym.Env):
             "menu_open": menu_open,
             "menu_cursor": menu_cursor,
             "menu_target": menu_target,
-            "menu_depth": menu_depth,
             "menu_has_options": menu_has_options,
             "menu_last_index": menu_last_index,
         }
