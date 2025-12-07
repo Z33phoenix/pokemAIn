@@ -10,6 +10,18 @@ A hierarchical RL stack for Pokemon Red built on PyBoy. A shared vision encoder 
 - **Environment (`src/env/pokemon_red_gym.py`)**: Gymnasium wrapper around PyBoy; pulls only rewards/signals from RAM; supports multiple starting states per phase and handles user window close gracefully.
 - **Rewards (`src/env/rewards.py`)**: Configurable shaping for nav/battle/menu with menu-open bonuses and exploration/battle heuristics wired through `ram_map.py`.
 
+## Entry Points You Should Use
+- Full stack: `python experiments/train_end_to_end.py`
+- Single specialist pretraining: `python experiments/train_nav_phase.py`, `train_battle_phase.py`, or `train_menu_phase.py` (all route through `experiments/phased_training.py`)
+- Parallel workers + best-brain combiner: `python experiments/train_multi_agent.py`
+- State capture helper: `python setup_game.py`
+
+## Notes on Optional/Legacy Files
+- `watch_agent.py` is a legacy visualization stub; the environment now requires a config dict. It remains for reference but is not part of the training flow.
+- `main.py` is only a placeholder docstring; there is no CLI wired there today.
+- `config/walkthrough.json` is provided for future walkthrough-aware goals but is not currently consumed anywhere.
+- `config/ModelFile.txt` defines the prompt for a local LLM (e.g., Ollama) used by `PokemonGoalLLM`; keep it in sync with your local model even though the code does not read it directly.
+
 ## Repository Layout
 - `config/hyperparameters.yaml`: Central training and env settings (state paths, replay sizes, reward weights).
 - `experiments/`: Training entry points (`train_*_phase.py`, `train_end_to_end.py`, `train_multi_agent.py`) plus shared `phased_training.py`.

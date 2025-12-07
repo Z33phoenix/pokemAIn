@@ -22,9 +22,11 @@ class PokemonRedGym(gym.Env):
     """
 
     def __init__(self, config: Dict[str, Any]):
+        """Initialize PyBoy, load optional states, and prepare observation/action spaces."""
         super().__init__()
         self.config = config
-        window_backend = "headless" if config.get("headless", True) else "SDL2"
+        # PyBoy 2.x expects "null" instead of the deprecated "headless"/"dummy" window.
+        window_backend = "null" if config.get("headless", True) else "SDL2"
         self.pyboy = pyboy.PyBoy(
             config.get("rom_path", "pokemon_red.gb"),
             window=window_backend,
@@ -84,6 +86,7 @@ class PokemonRedGym(gym.Env):
         self.window_closed = False
 
     def reset(self, seed: int | None = None, options: Dict[str, Any] | None = None):
+        """Reset the emulator to a queued state (or ROM boot) and return (obs, info)."""
         super().reset(seed=seed)
         if self.window_closed:
             raise RuntimeError("Cannot reset environment: PyBoy window is closed.")
@@ -96,6 +99,7 @@ class PokemonRedGym(gym.Env):
         return obs, info
 
     def step(self, action: int):
+        """Execute an action, advance frames with repeats, and return the Gym step tuple."""
         if self.window_closed:
             raise RuntimeError("PyBoy window has been closed by the user.")
 
@@ -119,12 +123,20 @@ class PokemonRedGym(gym.Env):
         return obs, reward, terminated, truncated, info
 
     def _get_obs(self):
+        """Capture the current 84x84 grayscale observation from PyBoy."""
         raw_screen = self.pyboy.screen.image
         gray = raw_screen.convert("L")
         resized = gray.resize((84, 84))
         return np.array(resized, dtype=np.uint8)[None, ...]
 
+    def _compute_party_power(self) -> float:
+        """Heuristic party strength proxy based on current HP fraction."""
+        # Simple proxy: use first mon HP fraction as power; extend later if needed.
+        hp_current, hp_max = ram_map.read_player_hp(self.memory)
+        return (hp_current / hp_max) if hp_max > 0 else 0.0
+
     def _get_info(self) -> Dict[str, Any]:
+        """Read relevant RAM offsets into a structured info dict."""
         hp_current, hp_max = ram_map.read_player_hp(self.memory)
         enemy_hp_current, enemy_hp_max = ram_map.read_enemy_hp(self.memory)
         pos_x, pos_y = ram_map.read_player_position(self.memory)
@@ -135,13 +147,34 @@ class PokemonRedGym(gym.Env):
         menu_cursor = ram_map.read_menu_cursor(self.memory)
         menu_target = ram_map.read_menu_target(self.memory)
         menu_depth = ram_map.read_menu_depth(self.memory)
+        badge_flags = ram_map.read_badge_flags(self.memory)
+        badges = {
+            "brock": ram_map.read_flag_brock(self.memory),
+            "misty": ram_map.read_flag_misty(self.memory),
+            "lt_surge": ram_map.read_flag_lt_surge(self.memory),
+            "erika": ram_map.read_flag_erika(self.memory),
+            "koga": ram_map.read_flag_koga(self.memory),
+            "sabrina": ram_map.read_flag_sabrina(self.memory),
+            "blaine": ram_map.read_flag_blaine(self.memory),
+            "giovanni": ram_map.read_flag_giovanni(self.memory),
+        }
+        quest_flags = {
+            "town_map": ram_map.read_flag_town_map(self.memory),
+            "oak_parcel": ram_map.read_flag_oak_parcel(self.memory),
+            "lapras": ram_map.read_flag_lapras(self.memory),
+            "snorlax_vermilion": ram_map.read_flag_snorlax_vermilion(self.memory),
+            "snorlax_celadon": ram_map.read_flag_snorlax_celadon(self.memory),
+            "ss_anne": ram_map.read_flag_ss_anne(self.memory),
+            "mewtwo": ram_map.read_flag_mewtwo(self.memory),
+        }
         return {
             "map_id": ram_map.read_map_id(self.memory),
             "x": pos_x,
             "y": pos_y,
             "battle_active": ram_map.is_battle_active(self.memory),
             "party_size": ram_map.read_party_size(self.memory),
-            "hp_percent": (hp_current / hp_max) if hp_max > 0 else 0.0,
+            # Treat empty party as full HP to avoid spurious low-HP penalties.
+            "hp_percent": (hp_current / hp_max) if hp_max > 0 else 1.0,
             "hp_current": hp_current,
             "hp_max": hp_max,
             "enemy_hp_percent": (enemy_hp_current / enemy_hp_max) if enemy_hp_max > 0 else 0.0,
@@ -153,9 +186,14 @@ class PokemonRedGym(gym.Env):
             "menu_depth": menu_depth,
             "menu_has_options": menu_has_options,
             "menu_last_index": menu_last_index,
+            "badge_count": ram_map.read_badge_count(self.memory),
+            "badges": badges,
+            "quest_flags": quest_flags,
+            "party_power": self._compute_party_power(),
         }
 
     def close(self):
+        """Stop the PyBoy emulator."""
         self.pyboy.stop()
 
     # ------------------------------------------------------------------ #
@@ -182,6 +220,7 @@ class PokemonRedGym(gym.Env):
         return deduped
 
     def _load_state_buffers(self, state_paths: List[str]) -> List[Tuple[str, io.BytesIO]]:
+        """Load .state files into in-memory buffers for fast resets."""
         buffers: List[Tuple[str, io.BytesIO]] = []
         for path in state_paths:
             try:

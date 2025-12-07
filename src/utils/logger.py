@@ -9,6 +9,7 @@ class Logger:
     """Thin TensorBoard wrapper that recursively flattens metric dictionaries."""
 
     def __init__(self, log_dir: str = "experiments/logs", run_name: str | None = None):
+        """Create a SummaryWriter under a timestamped (or run-named) directory."""
         current_time = time.strftime("%Y%m%d-%H%M%S")
         folder = f"{run_name}_{current_time}" if run_name else current_time
         self.log_dir = os.path.join(log_dir, folder)
@@ -28,4 +29,5 @@ class Logger:
                 continue
 
     def close(self):
+        """Close the underlying SummaryWriter."""
         self.writer.close()

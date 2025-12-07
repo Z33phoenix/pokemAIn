@@ -86,6 +86,7 @@ def capture_state(
 
 
 def parse_args() -> argparse.Namespace:
+    """Build and parse CLI arguments for interactive state capture."""
     parser = argparse.ArgumentParser(
         description="Interactively capture multiple emulator states for phased training."
     )
@@ -168,6 +169,7 @@ def _resolve_resume(user_resume: str | None, output_path: str | None = None) -> 
 
 
 def main() -> None:
+    """Entry point for capturing one or more emulator states via PyBoy."""
     args = parse_args()
     rom_path = args.rom_path
     # Default resume state: prefer an existing states/initial.state so phases never overwrite it.

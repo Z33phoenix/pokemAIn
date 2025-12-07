@@ -1,0 +1,508 @@
+{
+  "schema_version": 1,
+  "segments": [
+    {
+      "id": "01_pokedex",
+      "quest_stage": "pallet_intro",
+      "conditions": {
+        "min_badges": 0,
+        "max_badges": 0,
+        "require_flags": [],
+        "forbid_flags": ["has_pokedex"]
+      },
+      "hint": "Get your starter and complete Oak's Parcel quest to obtain the Pokédex.",
+      "suggested_goal": {
+        "goal_type": "explore",
+        "priority": 80,
+        "target": {
+          "set_flags": ["has_pokedex"]
+        },
+        "metadata": {
+          "quest_stage": "pallet_intro",
+          "walkthrough_id": "01_pokedex"
+        }
+      }
+    },
+    {
+      "id": "02_boulder_badge",
+      "quest_stage": "pewter_gym",
+      "conditions": {
+        "min_badges": 0,
+        "max_badges": 0,
+        "require_flags": ["has_pokedex"],
+        "forbid_flags": ["has_boulder_badge"]
+      },
+      "hint": "Travel through Viridian Forest to Pewter City and defeat Brock for the Boulder Badge.",
+      "suggested_goal": {
+        "goal_type": "train",
+        "priority": 85,
+        "target": {
+          "target_badge": "BOULDER",
+          "set_flags": ["has_boulder_badge"]
+        },
+        "metadata": {
+          "quest_stage": "pewter_gym",
+          "walkthrough_id": "02_boulder_badge"
+        }
+      }
+    },
+    {
+      "id": "03_cascade_badge",
+      "quest_stage": "cerulean_gym",
+      "conditions": {
+        "min_badges": 1,
+        "max_badges": 1,
+        "require_flags": ["has_boulder_badge"],
+        "forbid_flags": ["has_cascade_badge"]
+      },
+      "hint": "Go east through Mt. Moon to Cerulean City and defeat Misty for the Cascade Badge.",
+      "suggested_goal": {
+        "goal_type": "train",
+        "priority": 85,
+        "target": {
+          "target_badge": "CASCADE",
+          "set_flags": ["has_cascade_badge"]
+        },
+        "metadata": {
+          "quest_stage": "cerulean_gym",
+          "walkthrough_id": "03_cascade_badge"
+        }
+      }
+    },
+    {
+      "id": "04_ss_ticket",
+      "quest_stage": "bill_ticket",
+      "conditions": {
+        "min_badges": 2,
+        "max_badges": 2,
+        "require_flags": ["has_cascade_badge"],
+        "forbid_flags": ["has_ss_ticket"]
+      },
+      "hint": "Cross Nugget Bridge, visit Bill, and obtain the S.S. Ticket.",
+      "suggested_goal": {
+        "goal_type": "explore",
+        "priority": 80,
+        "target": {
+          "set_flags": ["has_ss_ticket"]
+        },
+        "metadata": {
+          "quest_stage": "bill_ticket",
+          "walkthrough_id": "04_ss_ticket"
+        }
+      }
+    },
+    {
+      "id": "05_cut_hm",
+      "quest_stage": "verm_cut",
+      "conditions": {
+        "min_badges": 2,
+        "max_badges": 2,
+        "require_flags": ["has_ss_ticket"],
+        "forbid_flags": ["has_cut"]
+      },
+      "hint": "Reach Vermilion City, clear the S.S. Anne, and get HM01 Cut from the captain.",
+      "suggested_goal": {
+        "goal_type": "explore",
+        "priority": 80,
+        "target": {
+          "set_flags": ["has_cut"]
+        },
+        "metadata": {
+          "quest_stage": "verm_cut",
+          "walkthrough_id": "05_cut_hm"
+        }
+      }
+    },
+    {
+      "id": "06_thunder_badge",
+      "quest_stage": "verm_gym",
+      "conditions": {
+        "min_badges": 2,
+        "max_badges": 2,
+        "require_flags": ["has_cut"],
+        "forbid_flags": ["has_thunder_badge"]
+      },
+      "hint": "Use Cut to enter the Vermilion Gym and defeat Lt. Surge for the Thunder Badge.",
+      "suggested_goal": {
+        "goal_type": "train",
+        "priority": 85,
+        "target": {
+          "target_badge": "THUNDER",
+          "set_flags": ["has_thunder_badge"]
+        },
+        "metadata": {
+          "quest_stage": "verm_gym",
+          "walkthrough_id": "06_thunder_badge"
+        }
+      }
+    },
+    {
+      "id": "07_flash_hm",
+      "quest_stage": "diglett_flash",
+      "conditions": {
+        "min_badges": 3,
+        "max_badges": 3,
+        "require_flags": ["has_thunder_badge"],
+        "forbid_flags": ["has_flash"]
+      },
+      "hint": "Go through Diglett's Cave to Route 2 and obtain HM05 Flash from Oak's aide.",
+      "suggested_goal": {
+        "goal_type": "explore",
+        "priority": 70,
+        "target": {
+          "set_flags": ["has_flash"]
+        },
+        "metadata": {
+          "quest_stage": "diglett_flash",
+          "walkthrough_id": "07_flash_hm"
+        }
+      }
+    },
+    {
+      "id": "08_lavender_arrival",
+      "quest_stage": "rock_tunnel",
+      "conditions": {
+        "min_badges": 3,
+        "max_badges": 3,
+        "require_flags": ["has_flash"],
+        "forbid_flags": ["has_reached_lavender"]
+      },
+      "hint": "From Cerulean, pass Route 9 and 10, use Flash in Rock Tunnel, and reach Lavender Town.",
+      "suggested_goal": {
+        "goal_type": "explore",
+        "priority": 75,
+        "target": {
+          "set_flags": ["has_reached_lavender"]
+        },
+        "metadata": {
+          "quest_stage": "rock_tunnel",
+          "walkthrough_id": "08_lavender_arrival"
+        }
+      }
+    },
+    {
+      "id": "09_rainbow_badge",
+      "quest_stage": "celadon_gym",
+      "conditions": {
+        "min_badges": 3,
+        "max_badges": 3,
+        "require_flags": ["has_reached_lavender"],
+        "forbid_flags": ["has_rainbow_badge"]
+      },
+      "hint": "Go west to Celadon City and defeat Erika for the Rainbow Badge.",
+      "suggested_goal": {
+        "goal_type": "train",
+        "priority": 85,
+        "target": {
+          "target_badge": "RAINBOW",
+          "set_flags": ["has_rainbow_badge"]
+        },
+        "metadata": {
+          "quest_stage": "celadon_gym",
+          "walkthrough_id": "09_rainbow_badge"
+        }
+      }
+    },
+    {
+      "id": "10_silph_scope",
+      "quest_stage": "celadon_rocket",
+      "conditions": {
+        "min_badges": 4,
+        "max_badges": 4,
+        "require_flags": ["has_rainbow_badge"],
+        "forbid_flags": ["has_silph_scope"]
+      },
+      "hint": "Clear the Team Rocket Hideout under Celadon Game Corner to obtain the Silph Scope.",
+      "suggested_goal": {
+        "goal_type": "explore",
+        "priority": 80,
+        "target": {
+          "set_flags": ["has_silph_scope"]
+        },
+        "metadata": {
+          "quest_stage": "celadon_rocket",
+          "walkthrough_id": "10_silph_scope"
+        }
+      }
+    },
+    {
+      "id": "11_pokeflute",
+      "quest_stage": "lavender_tower",
+      "conditions": {
+        "min_badges": 4,
+        "max_badges": 4,
+        "require_flags": ["has_silph_scope"],
+        "forbid_flags": ["has_pokeflute"]
+      },
+      "hint": "Return to Lavender Town, clear Pokémon Tower, and rescue Mr. Fuji to obtain the Poké Flute.",
+      "suggested_goal": {
+        "goal_type": "explore",
+        "priority": 80,
+        "target": {
+          "set_flags": ["has_pokeflute"]
+        },
+        "metadata": {
+          "quest_stage": "lavender_tower",
+          "walkthrough_id": "11_pokeflute"
+        }
+      }
+    },
+    {
+      "id": "12_open_saffron",
+      "quest_stage": "saffron_access",
+      "conditions": {
+        "min_badges": 4,
+        "max_badges": 4,
+        "require_flags": ["has_pokeflute"],
+        "forbid_flags": ["saffron_open"]
+      },
+      "hint": "Bring a drink from Celadon to a gate guard to open access to Saffron City.",
+      "suggested_goal": {
+        "goal_type": "explore",
+        "priority": 70,
+        "target": {
+          "set_flags": ["saffron_open"]
+        },
+        "metadata": {
+          "quest_stage": "saffron_access",
+          "walkthrough_id": "12_open_saffron"
+        }
+      }
+    },
+    {
+      "id": "13_silph_cleared",
+      "quest_stage": "silph_company",
+      "conditions": {
+        "min_badges": 4,
+        "max_badges": 4,
+        "require_flags": ["saffron_open"],
+        "forbid_flags": ["silph_cleared"]
+      },
+      "hint": "In Saffron, clear the Silph Co. building and defeat Giovanni to free the company.",
+      "suggested_goal": {
+        "goal_type": "train",
+        "priority": 85,
+        "target": {
+          "set_flags": ["silph_cleared"]
+        },
+        "metadata": {
+          "quest_stage": "silph_company",
+          "walkthrough_id": "13_silph_cleared"
+        }
+      }
+    },
+    {
+      "id": "14_marsh_badge",
+      "quest_stage": "saffron_gym",
+      "conditions": {
+        "min_badges": 4,
+        "max_badges": 4,
+        "require_flags": ["silph_cleared"],
+        "forbid_flags": ["has_marsh_badge"]
+      },
+      "hint": "Use the warp tiles in the Saffron Gym to reach Sabrina and earn the Marsh Badge.",
+      "suggested_goal": {
+        "goal_type": "train",
+        "priority": 85,
+        "target": {
+          "target_badge": "MARSH",
+          "set_flags": ["has_marsh_badge"]
+        },
+        "metadata": {
+          "quest_stage": "saffron_gym",
+          "walkthrough_id": "14_marsh_badge"
+        }
+      }
+    },
+    {
+      "id": "15_snorlax_cleared",
+      "quest_stage": "snorlax_blockade",
+      "conditions": {
+        "min_badges": 4,
+        "max_badges": 6,
+        "require_flags": ["has_pokeflute"],
+        "forbid_flags": ["snorlax_cleared"]
+      },
+      "hint": "Use the Poké Flute to wake and clear at least one Snorlax blocking the southern routes.",
+      "suggested_goal": {
+        "goal_type": "train",
+        "priority": 70,
+        "target": {
+          "set_flags": ["snorlax_cleared"]
+        },
+        "metadata": {
+          "quest_stage": "snorlax_blockade",
+          "walkthrough_id": "15_snorlax_cleared"
+        }
+      }
+    },
+    {
+      "id": "16_soul_badge",
+      "quest_stage": "fuchsia_gym",
+      "conditions": {
+        "min_badges": 4,
+        "max_badges": 6,
+        "require_flags": ["snorlax_cleared"],
+        "forbid_flags": ["has_soul_badge"]
+      },
+      "hint": "Reach Fuchsia City and defeat Koga in the Gym for the Soul Badge.",
+      "suggested_goal": {
+        "goal_type": "train",
+        "priority": 85,
+        "target": {
+          "target_badge": "SOUL",
+          "set_flags": ["has_soul_badge"]
+        },
+        "metadata": {
+          "quest_stage": "fuchsia_gym",
+          "walkthrough_id": "16_soul_badge"
+        }
+      }
+    },
+    {
+      "id": "17_surf_strength",
+      "quest_stage": "safari_hms",
+      "conditions": {
+        "min_badges": 5,
+        "max_badges": 6,
+        "require_flags": ["has_soul_badge"],
+        "forbid_flags": ["has_surf", "has_strength"]
+      },
+      "hint": "In Fuchsia's Safari Zone, obtain HM03 Surf and HM04 Strength.",
+      "suggested_goal": {
+        "goal_type": "explore",
+        "priority": 80,
+        "target": {
+          "set_flags": ["has_surf", "has_strength"]
+        },
+        "metadata": {
+          "quest_stage": "safari_hms",
+          "walkthrough_id": "17_surf_strength"
+        }
+      }
+    },
+    {
+      "id": "18_cinnabar_access",
+      "quest_stage": "to_cinnabar",
+      "conditions": {
+        "min_badges": 5,
+        "max_badges": 7,
+        "require_flags": ["has_surf"],
+        "forbid_flags": ["has_reached_cinnabar"]
+      },
+      "hint": "Fly or walk to Pallet Town, Surf south along Route 21, and reach Cinnabar Island.",
+      "suggested_goal": {
+        "goal_type": "explore",
+        "priority": 75,
+        "target": {
+          "set_flags": ["has_reached_cinnabar"]
+        },
+        "metadata": {
+          "quest_stage": "to_cinnabar",
+          "walkthrough_id": "18_cinnabar_access"
+        }
+      }
+    },
+    {
+      "id": "19_mansion_key",
+      "quest_stage": "cinnabar_mansion",
+      "conditions": {
+        "min_badges": 5,
+        "max_badges": 7,
+        "require_flags": ["has_reached_cinnabar"],
+        "forbid_flags": ["has_mansion_key"]
+      },
+      "hint": "Explore the Pokémon Mansion on Cinnabar Island to find the Gym's Secret Key.",
+      "suggested_goal": {
+        "goal_type": "explore",
+        "priority": 80,
+        "target": {
+          "set_flags": ["has_mansion_key"]
+        },
+        "metadata": {
+          "quest_stage": "cinnabar_mansion",
+          "walkthrough_id": "19_mansion_key"
+        }
+      }
+    },
+    {
+      "id": "20_volcano_badge",
+      "quest_stage": "cinnabar_gym",
+      "conditions": {
+        "min_badges": 5,
+        "max_badges": 7,
+        "require_flags": ["has_mansion_key"],
+        "forbid_flags": ["has_volcano_badge"]
+      },
+      "hint": "Use the Secret Key to open the Cinnabar Gym and defeat Blaine for the Volcano Badge.",
+      "suggested_goal": {
+        "goal_type": "train",
+        "priority": 85,
+        "target": {
+          "target_badge": "VOLCANO",
+          "set_flags": ["has_volcano_badge"]
+        },
+        "metadata": {
+          "quest_stage": "cinnabar_gym",
+          "walkthrough_id": "20_volcano_badge"
+        }
+      }
+    },
+    {
+      "id": "21_earth_badge",
+      "quest_stage": "viridian_gym",
+      "conditions": {
+        "min_badges": 7,
+        "max_badges": 7,
+        "require_flags": ["has_volcano_badge"],
+        "forbid_flags": ["has_earth_badge"]
+      },
+      "hint": "Return to Viridian City, enter the reopened Gym, and defeat Giovanni for the Earth Badge.",
+      "suggested_goal": {
+        "goal_type": "train",
+        "priority": 90,
+        "target": {
+          "target_badge": "EARTH",
+          "set_flags": ["has_earth_badge"]
+        },
+        "metadata": {
+          "quest_stage": "viridian_gym",
+          "walkthrough_id": "21_earth_badge"
+        }
+      }
+    },
+    {
+      "id": "22_elite_four",
+      "quest_stage": "elite_four",
+      "conditions": {
+        "min_badges": 8,
+        "max_badges": 8,
+        "require_flags": [
+          "has_boulder_badge",
+          "has_cascade_badge",
+          "has_thunder_badge",
+          "has_rainbow_badge",
+          "has_soul_badge",
+          "has_marsh_badge",
+          "has_volcano_badge",
+          "has_earth_badge",
+          "has_surf",
+          "has_strength"
+        ],
+        "forbid_flags": ["champion_defeated"]
+      },
+      "hint": "Head through Route 22 and Route 23, clear Victory Road, and defeat the Elite Four and Champion.",
+      "suggested_goal": {
+        "goal_type": "train",
+        "priority": 100,
+        "target": {
+          "set_flags": ["champion_defeated"]
+        },
+        "metadata": {
+          "quest_stage": "elite_four",
+          "walkthrough_id": "22_elite_four"
+        }
+      }
+    }
+  ]
+}

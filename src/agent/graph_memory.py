@@ -15,9 +15,10 @@ class GraphMemory:
     def __init__(
         self,
         max_nodes: int = 5000,
-        downsample_size: int = 8,
-        quantization_step: int = 32,
-    ):
+    downsample_size: int = 8,
+    quantization_step: int = 32,
+):
+        """Configure graph capacity and hashing parameters."""
         self.graph = nx.DiGraph()
         self.current_node: Optional[bytes] = None
         self.max_nodes = max_nodes

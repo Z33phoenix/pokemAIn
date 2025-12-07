@@ -18,11 +18,13 @@ class Goal:
     target: Dict[str, Any]
     metadata: Dict[str, Any]
     max_steps: int
+    goal_vector: Optional[list[float]] = None
     steps_spent: int = 0
     status: str = "pending"
     progress: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
+        """Return a serializable dictionary representation of the goal."""
         return {
             "name": self.name,
             "goal_type": self.goal_type,
@@ -30,6 +32,7 @@ class Goal:
             "target": self.target,
             "metadata": self.metadata,
             "max_steps": self.max_steps,
+            "goal_vector": self.goal_vector,
             "steps_spent": self.steps_spent,
             "status": self.status,
             "progress": self.progress,
@@ -47,6 +50,7 @@ class Director(nn.Module):
     """
 
     def __init__(self, config: Dict[str, Any]):
+        """Initialize shared encoder, router heads, goal tracking, and graph memory."""
         super().__init__()
         self.config = config
         hidden_dim = config.get("router_hidden_dim", 64)
@@ -75,6 +79,8 @@ class Director(nn.Module):
         self.goal_specialist_map = config.get(
             "goal_specialist_map", {"explore": 0, "train": 1, "survive": 2, "menu": 2}
         )
+        self.goal_llm_cfg = config.get("goal_llm", {})
+        self.llm_enabled = bool(self.goal_llm_cfg.get("enabled", False))
 
         self.active_goal: Optional[Goal] = None
         self.goal_queue: List[Goal] = []
@@ -101,14 +107,32 @@ class Director(nn.Module):
         state_hash, is_new_state = self.graph.update(obs_cpu, info, last_action=None)
 
         self._update_goal_progress(info, is_new_state)
+        if self.active_goal is None and self.goal_queue:
+            self._activate_goal(self.goal_queue.pop(0))
+
         features = self.encoder(obs)
         goal_logits = self.goal_head(features)
         desired_goal_type = self._determine_goal_type(info, goal_logits, epsilon)
-        if self.active_goal is None or self.active_goal.goal_type != desired_goal_type:
+        if self.active_goal is None and not self.llm_enabled:
+            self._activate_goal(self._make_goal(desired_goal_type, info))
+        elif self.active_goal is not None and not self.llm_enabled and self.active_goal.goal_type != desired_goal_type:
             self._activate_goal(self._make_goal(desired_goal_type, info))
 
         logits = self.router(features)
         logits = self._apply_goal_bias(logits)
+
+        # If we already have an active goal, route directly to the mapped specialist
+        # to keep control aligned with the current goal instead of re-deciding from
+        # the frame alone.
+        if self.active_goal:
+            mapped_idx = self.goal_specialist_map.get(self.active_goal.goal_type)
+            if mapped_idx is not None:
+                return (
+                    mapped_idx,
+                    features,
+                    None if not self.backtracking_mode else None,
+                    self.active_goal.as_dict(),
+                )
 
         if self.backtracking_mode and self.target_path:
             forced_action = self.target_path.pop(0)
@@ -139,6 +163,7 @@ class Director(nn.Module):
     def _determine_goal_type(
         self, info: Dict[str, Any], goal_logits: torch.Tensor, epsilon: float
     ) -> str:
+        """Pick a goal type using logits, epsilon-greedy exploration, and menu/battle guards."""
         if info.get("battle_active", False):
             return "train"
         if self._menu_active(info):
@@ -167,6 +192,7 @@ class Director(nn.Module):
         return goal_type_list[goal_idx]
 
     def _make_goal(self, goal_type: str, info: Dict[str, Any]) -> Goal:
+        """Dispatch to a goal-construction helper based on goal_type."""
         if goal_type == "train":
             return self._make_train_goal(info)
         if goal_type == "survive":
@@ -176,6 +202,7 @@ class Director(nn.Module):
         return self._make_exploration_goal(info)
 
     def _make_exploration_goal(self, info: Dict[str, Any]) -> Goal:
+        """Build a novelty-seeking exploration goal."""
         goal_cfg = self.config.get("goals", {}).get("explore", {})
         goal = Goal(
             name=f"explore-{self.goal_counter}",
@@ -184,11 +211,13 @@ class Director(nn.Module):
             target={"novel_states": goal_cfg.get("novel_states", 0)},
             metadata={"start_map": info.get("map_id"), "behavior": "explore"},
             max_steps=goal_cfg.get("max_steps", 0),
+            goal_vector=None,
         )
         self.goal_counter += 1
         return goal
 
     def _make_train_goal(self, info: Dict[str, Any]) -> Goal:
+        """Build a training goal oriented around battles won or XP gained."""
         goal_cfg = self.config.get("goals", {}).get("train", {})
         goal = Goal(
             name=f"train-{self.goal_counter}",
@@ -200,11 +229,13 @@ class Director(nn.Module):
             },
             metadata={"behavior": "train"},
             max_steps=goal_cfg.get("max_steps", 0),
+            goal_vector=None,
         )
         self.goal_counter += 1
         return goal
 
     def _make_survive_goal(self, info: Dict[str, Any]) -> Goal:
+        """Build a survivability goal targeting higher HP."""
         goal_cfg = self.config.get("goals", {}).get("survive", {})
         goal = Goal(
             name=f"survive-{self.goal_counter}",
@@ -216,11 +247,13 @@ class Director(nn.Module):
                 "behavior": "survive",
             },
             max_steps=goal_cfg.get("max_steps", 0),
+            goal_vector=None,
         )
         self.goal_counter += 1
         return goal
 
     def _make_menu_goal(self, info: Dict[str, Any]) -> Goal:
+        """Build a deterministic menu-navigation goal using RAM cursor/target hints."""
         goal_cfg = self.config.get("goals", {}).get("menu", {})
         default_cursor = (
             goal_cfg.get("cursor_row"),
@@ -238,19 +271,25 @@ class Director(nn.Module):
             },
             metadata={"behavior": "menu"},
             max_steps=goal_cfg.get("max_steps", 0),
+            goal_vector=None,
         )
         self.goal_counter += 1
         return goal
 
     def _activate_goal(self, goal: Optional[Goal]):
+        """Promote a goal to active status and reset its bookkeeping."""
         if goal is None:
             return
         goal.status = "active"
         goal.steps_spent = 0
         goal.progress = {}
+        # Remove queue-only metadata when the goal is promoted to active.
+        goal.metadata.pop("queue_expires_at", None)
+        goal.metadata.pop("queued_at_step", None)
         self.active_goal = goal
 
     def _complete_active_goal(self, status: str):
+        """Mark the active goal complete with a status and clear routing state."""
         if not self.active_goal:
             return
         self.active_goal.status = status
@@ -260,6 +299,7 @@ class Director(nn.Module):
         self.target_path.clear()
 
     def _update_goal_progress(self, info: Dict[str, Any], is_new_state: bool):
+        """Update progress for the active goal and complete it when satisfied."""
         if not self.active_goal:
             return
 
@@ -331,6 +371,7 @@ class Director(nn.Module):
         return bool(menu_open and has_options)
 
     def _apply_goal_bias(self, logits: torch.Tensor) -> torch.Tensor:
+        """Boost router logits toward the specialist mapped to the active goal."""
         if self.active_goal is None:
             return logits
         bias_cfg = self.config.get("goal_bias", {})
@@ -341,11 +382,32 @@ class Director(nn.Module):
             bias[:, target_idx] += bias_cfg.get(goal_type, 0.0)
         return logits + bias
 
-    def enqueue_goal(self, goal: Goal):
+    def enqueue_goal(self, goal: Goal, current_step: Optional[int] = None):
+        """Add a goal to the priority queue with an optional expiration step."""
+        if current_step is not None and goal.max_steps:
+            goal.metadata["queue_expires_at"] = current_step + int(goal.max_steps)
+            goal.metadata["queued_at_step"] = current_step
         self.goal_queue.append(goal)
         self.goal_queue.sort(key=lambda g: g.priority, reverse=True)
 
+    def prune_expired_goals(self, current_step: int) -> int:
+        """Remove queued goals whose queue TTL has elapsed; returns count removed."""
+        before = len(self.goal_queue)
+        self.goal_queue = [
+            g
+            for g in self.goal_queue
+            if g.metadata.get("queue_expires_at") is None or g.metadata["queue_expires_at"] > current_step
+        ]
+        return before - len(self.goal_queue)
+
+    def get_last_completed_goal(self) -> Optional[Dict[str, Any]]:
+        """Return the most recently completed goal dict, if any."""
+        if not self.completed_goals:
+            return None
+        return self.completed_goals[-1]
+
     def get_goal_metrics(self) -> Dict[str, float]:
+        """Expose metrics about the active/queued goal state for logging."""
         metrics = {
             "goal/has_active": 1.0 if self.active_goal else 0.0,
             "goal/type_explore": 0.0,
@@ -354,6 +416,7 @@ class Director(nn.Module):
             "goal/type_menu": 0.0,
             "goal/steps": 0.0,
             "goal/priority": 0.0,
+            "goal/queue_len": float(len(self.goal_queue)),
         }
         if self.active_goal:
             goal_type = self.active_goal.goal_type

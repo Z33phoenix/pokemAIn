@@ -8,6 +8,7 @@ class RewardSystem:
     """Reward shaping heuristics configured entirely via YAML."""
 
     def __init__(self, config: Dict[str, float]):
+        """Store config and initialize mutable reward-tracking state."""
         self.config = config
         self.visited_maps: set[int] = set()
         self.seen_coords: set[Tuple[int, int, int]] = set()
@@ -24,6 +25,7 @@ class RewardSystem:
         self.last_menu_open = False
 
     def reset(self):
+        """Clear all per-episode tracking variables."""
         self.visited_maps.clear()
         self.seen_coords.clear()
         self.last_coord = (0, 0, 0)
@@ -56,11 +58,15 @@ class RewardSystem:
             "nav_reward": 0.0,
             "battle_reward": 0.0,
             "menu_reward": 0.0,
+            "goal_bonus": 0.0,
         }
 
         map_id = info.get("map_id", 0)
         x, y = info.get("x", 0), info.get("y", 0)
         coord = (map_id, x, y)
+        prev_coord = self.last_coord
+        prev_hp_fraction = self.last_hp_fraction
+        was_in_battle_prev = self.was_in_battle
 
         if map_id not in self.visited_maps:
             self.visited_maps.add(map_id)
@@ -79,6 +85,22 @@ class RewardSystem:
         else:
             self.steps_stagnant = 0
             self.last_coord = coord
+
+        # Directional shaping: reward alignment with an explicit goal vector if provided.
+        if goal_ctx:
+            goal_vec = goal_ctx.get("goal_vector")
+            if goal_vec and moved:
+                dx = x - prev_coord[1]
+                dy = y - prev_coord[2]
+                step_vec = np.array([dx, dy], dtype=float)
+                step_norm = np.linalg.norm(step_vec)
+                dir_vec = np.array(goal_vec[:2], dtype=float)
+                dir_norm = np.linalg.norm(dir_vec)
+                if step_norm > 0 and dir_norm > 0:
+                    alignment = float(np.dot(step_vec / step_norm, dir_vec / dir_norm))
+                    urgency = float(goal_vec[2]) if len(goal_vec) > 2 else 1.0
+                    nav_weight = cfg.get("direction_follow_bonus", 0.0)
+                    rewards["nav_reward"] += nav_weight * alignment * max(0.0, urgency)
 
         party_size = info.get("party_size", 0)
         if party_size > self.max_party_size:
@@ -103,7 +125,8 @@ class RewardSystem:
                 if hp_percent is None:
                     hp_cur = (memory_bus[ram_map.HP_CURRENT] << 8) | memory_bus[ram_map.HP_CURRENT + 1]
                     hp_max = (memory_bus[ram_map.HP_MAX] << 8) | memory_bus[ram_map.HP_MAX + 1]
-                    hp_percent = (hp_cur / hp_max) if hp_max > 0 else 0.0
+                    # Treat empty party as full HP to avoid marking a loss when no Pokemon are present.
+                    hp_percent = (hp_cur / hp_max) if hp_max > 0 else 1.0
                 if hp_percent is not None and hp_percent < cfg.get("battle_loss_threshold", 0.0):
                     rewards["battle_reward"] += cfg.get("battle_loss", 0.0)
                 else:
@@ -115,7 +138,8 @@ class RewardSystem:
         if hp_percent is None:
             hp_cur = (memory_bus[ram_map.HP_CURRENT] << 8) | memory_bus[ram_map.HP_CURRENT + 1]
             hp_max = (memory_bus[ram_map.HP_MAX] << 8) | memory_bus[ram_map.HP_MAX + 1]
-            hp_percent = (hp_cur / hp_max) if hp_max > 0 else 0.0
+            # Treat empty party as full HP to avoid low-HP penalties when no Pokemon are present.
+            hp_percent = (hp_cur / hp_max) if hp_max > 0 else 1.0
         enemy_hp_percent = info.get("enemy_hp_percent")
         if enemy_hp_percent is None:
             enemy_hp_cur, enemy_hp_max = ram_map.read_enemy_hp(memory_bus)
@@ -141,6 +165,9 @@ class RewardSystem:
         self.last_hp_fraction = hp_percent
 
         rewards["menu_reward"] = self.compute_menu_reward(info, goal_ctx)
+        rewards["goal_bonus"] = self.compute_goal_bonus(
+            info, goal_ctx, prev_hp_fraction=prev_hp_fraction, was_in_battle_prev=was_in_battle_prev
+        )
 
         clip_value = cfg.get("reward_clip", np.inf)
         for key, value in rewards.items():
@@ -169,6 +196,7 @@ class RewardSystem:
         menu_active = self._menu_active(info)
         reward = 0.0
         if not menu_active:
+            reward += menu_cfg.get("inactive_penalty", 0.0)
             if self.last_menu_open:
                 reward += menu_cfg.get("close_penalty", 0.0)
             self.last_menu_cursor = None
@@ -216,6 +244,65 @@ class RewardSystem:
         clip_value = menu_cfg.get("reward_clip", self.config.get("reward_clip", np.inf))
         reward *= scale
         return float(np.clip(reward, -clip_value, clip_value))
+
+    def compute_goal_bonus(
+        self,
+        info: Dict[str, Any],
+        goal_ctx: Optional[Dict[str, Any]],
+        prev_hp_fraction: Optional[float] = None,
+        was_in_battle_prev: bool = False,
+    ) -> float:
+        """
+        Reward following explicit high-level goals. All weights are drawn from
+        the rewards.goal_bonus config block and default to zero for safety.
+        """
+        if not goal_ctx:
+            return 0.0
+        goal_type = goal_ctx.get("goal_type")
+        target = goal_ctx.get("target", {}) or {}
+        cfg = self.config.get("goal_bonus", {})
+        bonus = 0.0
+
+        if goal_type == "explore":
+            explore_cfg = cfg.get("explore", {})
+            target_map = target.get("map_id") or target.get("map")
+            if target_map is not None and info.get("map_id") == target_map:
+                bonus += explore_cfg.get("map_match", 0.0)
+            coord_target = target.get("coordinate") or target.get("coord")
+            if coord_target and len(coord_target) >= 2:
+                tx, ty = coord_target[0], coord_target[1]
+                tmap = coord_target[2] if len(coord_target) > 2 else target_map
+                same_map = tmap is None or info.get("map_id") == tmap
+                if same_map and info.get("x") == tx and info.get("y") == ty:
+                    bonus += explore_cfg.get("coordinate_match", 0.0)
+        elif goal_type == "train":
+            train_cfg = cfg.get("train", {})
+            battle_active = info.get("battle_active", False)
+            if was_in_battle_prev and not battle_active:
+                # Treat exiting battle with nonzero HP as success
+                hp_percent = info.get("hp_percent", self.last_hp_fraction or 0.0)
+                if hp_percent is None or hp_percent > 0.0:
+                    bonus += train_cfg.get("battle_complete", 0.0)
+        elif goal_type == "survive":
+            survive_cfg = cfg.get("survive", {})
+            hp_target = target.get("hp_target") or target.get("hp_threshold")
+            hp_percent = info.get("hp_percent")
+            if hp_percent is not None and hp_target is not None:
+                if prev_hp_fraction is not None and hp_percent > prev_hp_fraction and hp_percent >= hp_target:
+                    bonus += survive_cfg.get("hp_recovered", 0.0)
+                elif hp_percent >= hp_target:
+                    bonus += survive_cfg.get("hp_recovered", 0.0)
+        elif goal_type == "menu":
+            menu_cfg = cfg.get("menu", {})
+            target_menu = target.get("menu_target")
+            cursor = info.get("menu_cursor")
+            desired_cursor = target.get("cursor")
+            current_menu = info.get("menu_target")
+            if target_menu is not None and current_menu == target_menu:
+                bonus += menu_cfg.get("menu_reached", 0.0)
+            if desired_cursor is not None and cursor is not None and tuple(cursor) == tuple(desired_cursor):
+                bonus += menu_cfg.get("cursor_match", 0.0)
+        return float(bonus)
 
     @staticmethod
     def _menu_active(info: Dict[str, Any]) -> bool:

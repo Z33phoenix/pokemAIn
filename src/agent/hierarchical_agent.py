@@ -32,6 +32,7 @@ class HierarchicalAgent:
         director_cfg: Dict[str, Any],
         specialist_cfg: Dict[str, Any],
     ):
+        """Wire up director and specialist heads with allowed action mappings."""
         self.device = torch.device(device)
         self.director = Director(director_cfg).to(self.device)
 
@@ -62,6 +63,7 @@ class HierarchicalAgent:
         self.action_dim = action_dim
 
     def _zero_goal_embedding(self, dim: int) -> torch.Tensor:
+        """Return a zero goal embedding of the requested dimension on the agent device."""
         return torch.zeros((1, dim), device=self.device)
 
     def _encode_menu_goal(self, goal_ctx: Optional[Dict[str, Any]]) -> torch.Tensor:
@@ -72,6 +74,7 @@ class HierarchicalAgent:
 
     @staticmethod
     def _info_menu_active(info: Dict[str, Any]) -> bool:
+        """Return True when info reports an interactive menu with options."""
         menu_open = info.get("menu_open")
         has_options = info.get("menu_has_options")
         if menu_open is None and has_options is None:
@@ -140,6 +143,7 @@ class HierarchicalAgent:
         return action, specialist_idx, action_meta
 
     def save(self, checkpoint_dir: str = "checkpoints", tag: str = "latest"):
+        """Persist all components to disk under the provided tag."""
         os.makedirs(checkpoint_dir, exist_ok=True)
         torch.save(self.director.state_dict(), os.path.join(checkpoint_dir, f"director_{tag}.pth"))
         torch.save(self.nav_brain.state_dict(), os.path.join(checkpoint_dir, f"nav_brain_{tag}.pth"))
@@ -147,7 +151,9 @@ class HierarchicalAgent:
         torch.save(self.menu_brain.state_dict(), os.path.join(checkpoint_dir, f"menu_brain_{tag}.pth"))
 
     def load(self, checkpoint_dir: str = "checkpoints", tag: str = "latest"):
+        """Load components from disk if checkpoint files exist."""
         def _safe_load(path: str):
+            """Safely load a state_dict if the checkpoint file exists."""
             if not os.path.exists(path):
                 return None
             load_kwargs = {"map_location": self.device}

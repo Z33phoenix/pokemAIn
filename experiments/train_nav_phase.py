@@ -39,6 +39,7 @@ def train(
 
 
 def main() -> None:
+    """CLI wrapper for navigation-phase specialist training."""
     parser = build_phase_arg_parser(PHASE)
     args = parser.parse_args()
     train(

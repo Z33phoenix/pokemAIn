@@ -51,7 +51,39 @@ MENU_FIRST_DISPLAYED_ITEM_ID = 0xCC36  # ID of first displayed menu item
 # Experience / Progression
 # -----------------------------------------------------------------------------
 EXP_FIRST_MON = 0xD179  # 3 bytes (big endian)
+BADGE_FLAGS = 0xD356  # bitfield for gym badges
 
+# ----------------------------------------------------------------------------- #
+# Event / Quest flags (subset used for walkthrough-guided goals)
+# ----------------------------------------------------------------------------- #
+FLAG_TOWN_MAP = 0xD5F3
+FLAG_OAK_PARCEL = 0xD60D
+FLAG_LAPRAS = 0xD72E
+FLAG_GIOVANNI = 0xD751
+FLAG_BROCK = 0xD755
+FLAG_MISTY = 0xD75E
+FLAG_LT_SURGE = 0xD773
+FLAG_ERIKA = 0xD77C
+FLAG_KOGA = 0xD792
+FLAG_BLAINE = 0xD79A
+FLAG_SABRINA = 0xD7B3
+FLAG_SNORLAX_VERMILION = 0xD7D8
+FLAG_SNORLAX_CELADON = 0xD7E0
+FLAG_SS_ANNE = 0xD803
+FLAG_MEWTWO_BIT = (0xD5C0, 1)  # tuple of (address, bit)
+
+# Optional flags; uncomment/add as needed:
+# FLAG_FLASH = ...
+# FLAG_CUT = ...
+# FLAG_SURF = ...
+# FLAG_STRENGTH = ...
+# FLAG_SILPH_SCOPE = ...
+# FLAG_POKEFLUTE = ...
+# FLAG_SAFFRON_OPEN = ...
+# FLAG_SILPH_CLEARED = ...
+# FLAG_SNORLAX_CLEARED = ...
+# FLAG_MANSION_KEY = ...
+# FLAG_CHAMPION = ...
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
@@ -61,43 +93,43 @@ def _read_u16(memory, address: int) -> int:
 
 
 def read_player_hp(memory) -> Tuple[int, int]:
-    """Returns (current_hp, max_hp) as integers."""
+    """Return the player's current and max HP as a tuple of ints."""
     return _read_u16(memory, HP_CURRENT), _read_u16(memory, HP_MAX)
 
 
 def read_enemy_hp(memory) -> Tuple[int, int]:
-    """Returns (current_hp, max_hp) for the opposing Pokemon."""
+    """Return the opponent's current and max HP as a tuple of ints."""
     return _read_u16(memory, ENEMY_HP_CURRENT), _read_u16(memory, ENEMY_HP_MAX)
 
 
 def read_hp_fraction(memory) -> float:
-    """Returns the player's HP as a value in [0, 1]."""
+    """Return the player's HP fraction in [0, 1]."""
     hp_cur, hp_max = read_player_hp(memory)
     return (hp_cur / hp_max) if hp_max > 0 else 0.0
 
 
 def read_player_position(memory) -> Tuple[int, int]:
-    """Returns (x, y) overworld tile coordinates."""
+    """Return the player's overworld tile coordinates (x, y)."""
     return memory[X_POS], memory[Y_POS]
 
 
 def read_map_id(memory) -> int:
-    """Returns the current overworld map identifier."""
+    """Return the current overworld map identifier."""
     return memory[MAP_N]
 
 
 def read_party_size(memory) -> int:
-    """Returns the number of Pokemon in the player's party."""
+    """Return the number of Pokemon in the player's party."""
     return memory[PARTY_SIZE]
 
 
 def is_battle_active(memory) -> bool:
-    """Returns True when the player is currently in a battle."""
+    """Return True when RAM reports the player is in battle."""
     return memory[BATTLE_TYPE] != 0
 
 
 def read_first_mon_exp(memory) -> int:
-    """Returns the raw experience value for the first Pokemon slot."""
+    """Return the raw experience value for the first Pokemon slot."""
     return (
         (memory[EXP_FIRST_MON] << 16)
         | (memory[EXP_FIRST_MON + 1] << 8)
@@ -105,31 +137,129 @@ def read_first_mon_exp(memory) -> int:
     )
 
 
+# ----------------------------------------------------------------------------- #
+# Progression / flags helpers
+# ----------------------------------------------------------------------------- #
+def _flag(memory, addr: int, bit: int | None = None) -> bool:
+    """Return the boolean value of a flag byte (or bit within the byte)."""
+    val = memory[addr]
+    if bit is None:
+        return bool(val)
+    return bool(val & (1 << bit))
+
+
+def read_badge_flags(memory) -> int:
+    """Return the raw badge bitfield byte."""
+    return memory[BADGE_FLAGS]
+
+
+def read_badge_count(memory) -> int:
+    """Count the number of set bits in the badge flag byte."""
+    flags = read_badge_flags(memory)
+    return int(bin(flags).count("1"))
+
+
+def read_flag_town_map(memory) -> bool:
+    """Return True if the Town Map flag is set."""
+    return _flag(memory, FLAG_TOWN_MAP)
+
+
+def read_flag_oak_parcel(memory) -> bool:
+    """Return True if Oak's Parcel quest flag is set."""
+    return _flag(memory, FLAG_OAK_PARCEL)
+
+
+def read_flag_lapras(memory) -> bool:
+    """Return True if the Lapras event flag is set."""
+    return _flag(memory, FLAG_LAPRAS)
+
+
+def read_flag_giovanni(memory) -> bool:
+    """Return True if the Giovanni encounter flag is set."""
+    return _flag(memory, FLAG_GIOVANNI)
+
+
+def read_flag_brock(memory) -> bool:
+    """Return True if Brock has been defeated (Boulder Badge)."""
+    return _flag(memory, FLAG_BROCK)
+
+
+def read_flag_misty(memory) -> bool:
+    """Return True if Misty has been defeated (Cascade Badge)."""
+    return _flag(memory, FLAG_MISTY)
+
+
+def read_flag_lt_surge(memory) -> bool:
+    """Return True if Lt. Surge has been defeated (Thunder Badge)."""
+    return _flag(memory, FLAG_LT_SURGE)
+
+
+def read_flag_erika(memory) -> bool:
+    """Return True if Erika has been defeated (Rainbow Badge)."""
+    return _flag(memory, FLAG_ERIKA)
+
+
+def read_flag_koga(memory) -> bool:
+    """Return True if Koga has been defeated (Soul Badge)."""
+    return _flag(memory, FLAG_KOGA)
+
+
+def read_flag_blaine(memory) -> bool:
+    """Return True if Blaine has been defeated (Volcano Badge)."""
+    return _flag(memory, FLAG_BLAINE)
+
+
+def read_flag_sabrina(memory) -> bool:
+    """Return True if Sabrina has been defeated (Marsh Badge)."""
+    return _flag(memory, FLAG_SABRINA)
+
+
+def read_flag_snorlax_vermilion(memory) -> bool:
+    """Return True if the Vermilion Snorlax blockade has been cleared."""
+    return _flag(memory, FLAG_SNORLAX_VERMILION)
+
+
+def read_flag_snorlax_celadon(memory) -> bool:
+    """Return True if the Celadon Snorlax blockade has been cleared."""
+    return _flag(memory, FLAG_SNORLAX_CELADON)
+
+
+def read_flag_ss_anne(memory) -> bool:
+    """Return True if the S.S. Anne quest flag is set."""
+    return _flag(memory, FLAG_SS_ANNE)
+
+
+def read_flag_mewtwo(memory) -> bool:
+    """Return True if the Mewtwo-related bit is set."""
+    addr, bit = FLAG_MEWTWO_BIT
+    return _flag(memory, addr, bit=bit)
+
+
 # -----------------------------------------------------------------------------
 # Menu helpers
 # -----------------------------------------------------------------------------
 def read_menu_cursor(memory) -> Tuple[int, int]:
-    """Returns (row, col) menu cursor position for the top menu item."""
+    """Return (row, col) menu cursor position for the top menu item."""
     return memory[MENU_CURSOR_Y], memory[MENU_CURSOR_X]
 
 
 def read_current_menu_item(memory) -> int:
-    """Returns the currently selected menu item id (0 = topmost)."""
+    """Return the currently selected menu item id (0 = topmost)."""
     return memory[MENU_SELECTED_ITEM_ID]
 
 
 def read_last_menu_item(memory) -> int:
-    """Returns the id of the last menu item in the current menu."""
+    """Return the id of the last menu item in the current menu."""
     return memory[MENU_LAST_ITEM_ID]
 
 
 def read_party_active_index(memory) -> int:
-    """Returns index in party of the Pokemon currently sent out."""
+    """Return the index in party of the Pokemon currently sent out."""
     return memory[PARTY_ACTIVE_INDEX]
 
 
 def read_cursor_tile_pointer(memory) -> int:
-    """Returns the 16-bit pointer to the cursor tile in C3A0 buffer."""
+    """Return the 16-bit pointer to the cursor tile in C3A0 buffer."""
     return _read_u16(memory, CURSOR_TILE_PTR)
 
 

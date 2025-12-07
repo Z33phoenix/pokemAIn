@@ -1,41 +1,41 @@
-import time
+"""
+Legacy viewer for quickly rendering the agent's 84x84 observations.
+
+This is not part of the training flow and exists only as a simple manual
+visualization stub. The environment now requires a config dictionary; if you
+need a viewer, prefer wiring a real agent into the loop or use TensorBoard
+images. This file is kept for reference and may not be wired to your current
+checkpoints.
+"""
+
 import cv2
 import numpy as np
+
 from src.env.pokemon_red_gym import PokemonRedGym
 
-def main():
-    # 1. Init Environment with headless=False to see the PyBoy window
-    # emulation_speed=1 ensures it plays at real-time (60fps) rather than 1000fps
-    env = PokemonRedGym(headless=False, emulation_speed=1)
-    
+
+def main() -> None:
+    """Run a random-policy viewer that displays the agent's 84x84 observation."""
+    # Minimal config so the env boots in windowed mode. Adjust paths as needed.
+    env = PokemonRedGym({"headless": False, "emulation_speed": 1, "rom_path": "pokemon_red.gb"})
+
     obs, info = env.reset()
-    
-    print("Agent is playing... Press 'q' in the OpenCV window to quit.")
+    print("Random agent is playing... Press 'q' in the OpenCV window to quit.")
 
     while True:
-        # 2. Get Action (Random for now, replace with: agent.predict(obs))
-        # action = agent.predict(obs) 
-        action = env.action_space.sample() 
-        
-        # 3. Step the Environment
+        action = env.action_space.sample()
         obs, reward, done, truncated, info = env.step(action)
-        
-        # 4. Visualize the "Brain's Eye"
-        # obs is shape (1, 84, 84). We remove the channel dim to get (84, 84)
-        brain_view = obs[0] 
-        
-        # Resize it up to 256x256 so it's big enough to see on your monitor
+
+        brain_view = obs[0]
         brain_view_big = cv2.resize(brain_view, (256, 256), interpolation=cv2.INTER_NEAREST)
-        
-        # Display the "Brain View" in a separate OpenCV window
         cv2.imshow("What the AI Sees", brain_view_big)
-        
-        # Press 'q' to exit
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+
+        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
     env.close()
     cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     main()

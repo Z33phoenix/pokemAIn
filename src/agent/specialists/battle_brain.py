@@ -10,6 +10,7 @@ class CrossQBattleAgent(nn.Module):
     """Battle specialist matching the lightweight CrossQ architecture used for navigation."""
 
     def __init__(self, config: Dict[str, float], input_dim: int = 512):
+        """Initialize Q-network, optimizer, and hyperparameters for battles."""
         super().__init__()
         self.action_dim = config.get("action_dim", 8)
         self.gamma = config.get("gamma", 0.99)
@@ -40,12 +41,30 @@ class CrossQBattleAgent(nn.Module):
         epsilon: float = 0.1,
     ) -> int:
         """Epsilon-greedy discrete policy (goal currently unused)."""
+        preferred_action = None
+        if goal:
+            goal_type = goal.get("goal_type")
+            metadata = goal.get("metadata", {}) or {}
+            preferred_action = metadata.get("preferred_action")
+            if preferred_action is None:
+                preferred_action = metadata.get("safe_action")
+            if preferred_action is None:
+                preferred_action = goal.get("target", {}).get("action")
+            if goal_type == "survive":
+                epsilon = min(epsilon, 0.05)
+            elif goal_type == "train":
+                epsilon = min(epsilon, 0.1)
+
         if np.random.random() < epsilon:
             return np.random.randint(0, self.action_dim)
 
         self.eval()
         with torch.no_grad():
             q_values = self.forward(features)
+            if preferred_action is not None and 0 <= int(preferred_action) < self.action_dim:
+                bias = torch.zeros_like(q_values)
+                bias[:, int(preferred_action)] += 0.05
+                q_values = q_values + bias
             action = torch.argmax(q_values, dim=1).item()
         self.train()
         return action
@@ -57,6 +76,8 @@ class CrossQBattleAgent(nn.Module):
         rewards: torch.Tensor,
         next_features: torch.Tensor,
         dones: torch.Tensor,
+        goal: Optional[torch.Tensor] = None,
+        next_goal: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, Dict[str, float]]:
         """
         Computes the TD loss but leaves the optimizer step to the caller so the

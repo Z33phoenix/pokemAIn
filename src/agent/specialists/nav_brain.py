@@ -10,6 +10,7 @@ class CrossQNavAgent(nn.Module):
     """Navigation specialist implementing CrossQ without a target network."""
 
     def __init__(self, config: Dict[str, float], input_dim: int = 512):
+        """Initialize Q-network, optimizer, and hyperparameters for navigation."""
         super().__init__()
         self.action_dim = config.get("action_dim", 8)
         self.gamma = config.get("gamma", 0.99)
@@ -66,6 +67,8 @@ class CrossQNavAgent(nn.Module):
         rewards: torch.Tensor,
         next_features: torch.Tensor,
         dones: torch.Tensor,
+        goal: Optional[torch.Tensor] = None,
+        next_goal: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, Dict[str, float]]:
         """
         Computes the TD loss but leaves the optimizer step to the caller so the

@@ -13,7 +13,6 @@ environment:
   action_repeat: 24
   release_frame: 8
   max_steps: 2048
-  window_title_debug: true
 
 # =============================================================================
 # Training
@@ -59,6 +58,7 @@ rewards:
   stale_penalty: -0.2
   stale_threshold: 120
   nav_menu_open_bonus: 1.0
+  direction_follow_bonus: 0.5  # Scales reward for moving along goal_vector direction (dot product)
 
   # --- Battle shaping ---
   battle_tick: 0.0
@@ -74,6 +74,7 @@ rewards:
   menu:
     opened_menu: 1.0       # Bonus when entering any menu (bag/PC/party/START)
     open_bonus: 0.2        # Small per-step bonus for staying inside a menu
+    inactive_penalty: -1.0 # Constant penalty while not in a menu to avoid positive drift
     cursor_move: 0.1
     correct_target: 1.0
     cursor_on_target: 0.5
@@ -82,6 +83,19 @@ rewards:
     close_penalty: -1.0    # Applied when a menu closes without action (stops spam)
     scale: 0.01            # Normalize raw menu rewards (divide by 100)
     reward_clip: 1.0
+
+  # --- Explicit goal bonuses (added on top of other rewards) ---
+  goal_bonus:
+    explore:
+      map_match: 1.0
+      coordinate_match: 0.5
+    train:
+      battle_complete: 2.0
+    survive:
+      hp_recovered: 1.0
+    menu:
+      menu_reached: 0.5
+      cursor_match: 0.3
 
 # =============================================================================
 # Director
@@ -141,6 +155,14 @@ director:
     max_nodes: 5000
     downsample_size: 8
     quantization_step: 32
+  goal_llm:
+    enabled: True
+    api_url: http://localhost:11434/api/chat
+    model: pokemon-goal
+    timeout: 5.0
+    retry_interval: 32  # steps between retries when no active/queued goal
+    walkthrough_path: config/walkthrough.json  # Provided for future walkthrough-aware goals; currently unused
+  router_pretrain_path: checkpoints/director_router_pretrained.pth
 
 # =============================================================================
 # Specialists

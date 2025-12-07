@@ -6,11 +6,13 @@ class SegmentTree:
     Helper structure for O(log N) priority sampling.
     """
     def __init__(self, size, operation, init_value):
+        """Initialize a complete binary tree storing segment aggregates."""
         self.size = size
         self.operation = operation
         self.tree = np.full(2 * size, init_value, dtype=np.float32)
 
     def _operate(self, start, end, node, node_start, node_end):
+        """Recursively combine a range using the configured operation."""
         if start == node_start and end == node_end:
             return self.tree[node]
         mid = (node_start + node_end) // 2
@@ -26,6 +28,7 @@ class SegmentTree:
                 )
 
     def add(self, idx, value):
+        """Update a leaf value and refresh ancestors."""
         idx += self.size
         self.tree[idx] = value
         while idx > 1:
@@ -33,9 +36,11 @@ class SegmentTree:
             self.tree[idx] = self.operation(self.tree[2 * idx], self.tree[2 * idx + 1])
 
     def get_total(self):
+        """Return the aggregate value stored at the root."""
         return self.tree[1]
 
     def find(self, value):
+        """Locate the smallest index whose prefix sum exceeds `value`."""
         idx = 1
         while idx < self.size:
             if self.tree[2 * idx] >= value:
@@ -52,6 +57,7 @@ class PrioritizedReplayBuffer:
     - Returns float32 tensors for training.
     """
     def __init__(self, capacity, obs_shape, alpha=0.6, device="cpu", goal_shape=None, store_context=False):
+        """Pre-allocate buffers and supporting trees for prioritized replay."""
         self.capacity = capacity
         self.alpha = alpha
         self.device = device
@@ -168,7 +174,7 @@ class PrioritizedReplayBuffer:
         return (obs, actions, rewards, next_obs, dones, weights, indices, *extras)
 
     def update_priorities(self, indices, priorities):
-        """Update priorities after a training step based on TD-error."""
+        """Update tree priorities after a training step based on TD-error."""
         for idx, priority in zip(indices, priorities):
             priority = float(priority + 1e-5) # Add epsilon to prevent 0 probability
             self.sum_tree.add(idx, priority ** self.alpha)
@@ -176,4 +182,5 @@ class PrioritizedReplayBuffer:
             self.max_priority = max(self.max_priority, priority)
             
     def __len__(self):
+        """Return the number of filled entries currently in the buffer."""
         return self.capacity if self.full else self.pos

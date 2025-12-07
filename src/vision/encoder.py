@@ -9,6 +9,7 @@ class NatureCNN(nn.Module):
     Output: (B, 512) feature vector
     """
     def __init__(self, input_channels=1, features_dim=512):
+        """Initialize convolutional feature extractor and compute flatten size."""
         super().__init__()
         
         self.cnn = nn.Sequential(
@@ -38,10 +39,9 @@ class NatureCNN(nn.Module):
         )
 
     def forward(self, x):
-        # Expects float input normalized [0,1] or [0, 255]
-        # If input is 0-255, we normalize.
+        """Return a 512-dim feature vector from a (B, 1, 84, 84) input tensor."""
         if x.max() > 1.0:
              x = x / 255.0
-             
+
         x = self.cnn(x)
         return self.linear(x)

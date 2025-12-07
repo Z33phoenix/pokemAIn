@@ -42,6 +42,7 @@ def _phase_reward(phase: str, components: Dict[str, float], training_cfg: Dict[s
             total += components.get("nav_reward", 0.0)
         elif phase == "battle":
             total += components.get("battle_reward", 0.0)
+    total += components.get("goal_bonus", 0.0)
     clip = training_cfg.get("reward_clip", np.inf)
     return float(np.clip(total, -clip, clip))
 
@@ -270,9 +271,29 @@ def train_phase(
         )
 
         if phase == "nav":
-            nav_buffer.add(obs, local_action, total_reward, next_obs, done)
+            nav_buffer.add(
+                obs,
+                local_action,
+                total_reward,
+                next_obs,
+                done,
+                goal=goal_embedding_np,
+                next_goal=goal_embedding_np,
+                goal_ctx=goal_ctx,
+                next_goal_ctx=goal_ctx,
+            )
         elif phase == "battle":
-            battle_buffer.add(obs, local_action, total_reward, next_obs, done)
+            battle_buffer.add(
+                obs,
+                local_action,
+                total_reward,
+                next_obs,
+                done,
+                goal=goal_embedding_np,
+                next_goal=goal_embedding_np,
+                goal_ctx=goal_ctx,
+                next_goal_ctx=goal_ctx,
+            )
         else:
             # For menu-phase training, only store transitions that are at least
             # partly inside an interactive menu so the specialist does not
@@ -336,12 +357,14 @@ def train_phase(
                     agent.save_component("director", checkpoint_dir=checkpoint_dir, tag="best_battle")
 
             if phase == "menu" and len(menu_buffer) > batch_size:
-                sample = menu_buffer.sample(batch_size, include_context=True)
-                s, a, r, ns, d, w, idx, gctx, ngctx = sample
+                sample = menu_buffer.sample(batch_size, include_goals=True, include_context=True)
+                s, a, r, ns, d, w, idx, goal_embed, next_goal_embed, gctx, ngctx = sample
                 s_feat = agent.director.encoder(s)
                 ns_feat = agent.director.encoder(ns)
-                goal_embed = agent.menu_brain.encode_goal_batch(gctx, device=device)
-                next_goal_embed = agent.menu_brain.encode_goal_batch(ngctx, device=device)
+                if goal_embed is None:
+                    goal_embed = agent.menu_brain.encode_goal_batch(gctx, device=device)
+                if next_goal_embed is None:
+                    next_goal_embed = agent.menu_brain.encode_goal_batch(ngctx, device=device)
                 menu_loss, menu_stats = agent.menu_brain.train_step(
                     s_feat, goal_embed, a, r, ns_feat, next_goal_embed, d
                 )

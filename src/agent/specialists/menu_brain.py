@@ -16,6 +16,7 @@ class MenuBrain(nn.Module):
     """
 
     def __init__(self, config: Dict[str, Any], input_dim: int = 512):
+        """Initialize goal-conditioned Q-network and optimizer for menus."""
         super().__init__()
         self.goal_dim = config.get("goal_dim", 8)
         self.gamma = config.get("gamma", 0.99)
@@ -91,6 +92,7 @@ class MenuBrain(nn.Module):
         return self.encode_goal_batch([goal_ctx], device=device)
 
     def _prepare_goal(self, goal_embedding: Optional[torch.Tensor], batch: int) -> torch.Tensor:
+        """Return a goal tensor for the batch, defaulting to zeros when missing."""
         if goal_embedding is None:
             return torch.zeros((batch, self.goal_dim), device=self.q_net[0].weight.device)
         return goal_embedding

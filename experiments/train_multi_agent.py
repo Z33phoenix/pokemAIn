@@ -76,6 +76,7 @@ def _worker(agent_idx: int, args: argparse.Namespace, result_queue: Queue) -> No
 
 
 def _copy_if_exists(src: str, dst: str) -> bool:
+    """Copy src to dst if src exists; return True when copied."""
     if os.path.exists(src):
         shutil.copy(src, dst)
         return True
@@ -103,6 +104,7 @@ def combine_best_brains(summaries: List[Dict[str, Any]], output_dir: str) -> Dic
     os.makedirs(output_dir, exist_ok=True)
 
     def _best_by(key: str, better=min):
+        """Return the summary with the best value for the given metric."""
         candidates = [
             s
             for s in summaries
@@ -160,6 +162,7 @@ def combine_best_brains(summaries: List[Dict[str, Any]], output_dir: str) -> Dic
 
 
 def main() -> None:
+    """CLI to launch multiple agents in parallel and optionally combine outputs."""
     parser = argparse.ArgumentParser(description="Launch multiple agents in parallel and combine the best brains.")
     parser.add_argument("--config", type=str, default=None, help="Path to hyperparameters YAML.")
     parser.add_argument("--num-agents", type=int, default=4, help="Number of parallel agents to launch.")
