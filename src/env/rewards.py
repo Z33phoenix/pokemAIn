@@ -16,6 +16,7 @@ class RewardSystem:
         self.max_party_size = 0
         self.last_xp = 0
         self.last_hp_fraction = 1.0
+        self.last_enemy_hp_fraction: Optional[float] = None
         self.was_in_battle = False
         self.last_menu_cursor: Optional[Tuple[int, int]] = None
         self.last_menu_target: Optional[int] = None
@@ -30,6 +31,7 @@ class RewardSystem:
         self.max_party_size = 0
         self.last_xp = 0
         self.last_hp_fraction = 1.0
+        self.last_enemy_hp_fraction = None
         self.was_in_battle = False
         self.last_menu_cursor = None
         self.last_menu_target = None
@@ -88,6 +90,10 @@ class RewardSystem:
             rewards["global_reward"] += cfg.get("level_up", 0.0)
         self.last_xp = current_xp
 
+        menu_active = self._menu_active(info)
+        if menu_active and not self.last_menu_open:
+            rewards["nav_reward"] += cfg.get("nav_menu_open_bonus", 0.0)
+
         battle_active = info.get("battle_active", False)
         if battle_active:
             rewards["battle_reward"] += cfg.get("battle_tick", 0.0)
@@ -102,6 +108,7 @@ class RewardSystem:
                     rewards["battle_reward"] += cfg.get("battle_loss", 0.0)
                 else:
                     rewards["battle_reward"] += cfg.get("battle_win", 0.0)
+            self.last_enemy_hp_fraction = None
         self.was_in_battle = battle_active
 
         hp_percent = info.get("hp_percent")
@@ -109,7 +116,27 @@ class RewardSystem:
             hp_cur = (memory_bus[ram_map.HP_CURRENT] << 8) | memory_bus[ram_map.HP_CURRENT + 1]
             hp_max = (memory_bus[ram_map.HP_MAX] << 8) | memory_bus[ram_map.HP_MAX + 1]
             hp_percent = (hp_cur / hp_max) if hp_max > 0 else 0.0
-        if hp_percent > self.last_hp_fraction and hp_percent >= cfg.get("heal_target", 0.0):
+        enemy_hp_percent = info.get("enemy_hp_percent")
+        if enemy_hp_percent is None:
+            enemy_hp_cur, enemy_hp_max = ram_map.read_enemy_hp(memory_bus)
+            enemy_hp_percent = (enemy_hp_cur / enemy_hp_max) if enemy_hp_max > 0 else None
+
+        if battle_active:
+            if enemy_hp_percent is not None:
+                if self.last_enemy_hp_fraction is None:
+                    self.last_enemy_hp_fraction = enemy_hp_percent
+                enemy_delta = (self.last_enemy_hp_fraction or 0.0) - enemy_hp_percent
+                if enemy_delta > 0:
+                    rewards["battle_reward"] += cfg.get("battle_damage", 0.0) * enemy_delta
+                self.last_enemy_hp_fraction = enemy_hp_percent
+            if hp_percent is not None and self.last_hp_fraction is not None:
+                damage_taken = self.last_hp_fraction - hp_percent
+                if damage_taken > 0:
+                    rewards["battle_reward"] += cfg.get("battle_damage_taken", 0.0) * damage_taken
+            if hp_percent is not None and hp_percent >= cfg.get("battle_hp_high_threshold", 1.0):
+                rewards["battle_reward"] += cfg.get("battle_hp_high_bonus", 0.0)
+
+        if hp_percent is not None and hp_percent > self.last_hp_fraction and hp_percent >= cfg.get("heal_target", 0.0):
             rewards["global_reward"] += cfg.get("heal_success", 0.0)
         self.last_hp_fraction = hp_percent
 
@@ -139,18 +166,23 @@ class RewardSystem:
         All weights come from the rewards.menu config block.
         """
         menu_cfg = self.config.get("menu", {})
-        if not info.get("menu_open"):
+        menu_active = self._menu_active(info)
+        reward = 0.0
+        if not menu_active:
+            if self.last_menu_open:
+                reward += menu_cfg.get("close_penalty", 0.0)
             self.last_menu_cursor = None
             self.menu_steps_stagnant = 0
             self.last_menu_target = info.get("menu_target")
             self.last_menu_open = False
-            return 0.0
+            clip_value = menu_cfg.get("reward_clip", self.config.get("reward_clip", np.inf))
+            return float(np.clip(reward, -clip_value, clip_value))
 
-        reward = 0.0
-        # Reward entering or staying in a menu so the specialist learns to open/start menus.
+        # Reward entering a menu once so the specialist gets a strong signal for
+        # opening, but avoid a constant per-step bonus that encourages stalling.
         if not self.last_menu_open:
             reward += menu_cfg.get("opened_menu", 0.0)
-        reward += menu_cfg.get("open_bonus", 0.0)
+        # No per-step open_bonus; use cursor/target rewards instead.
 
         cursor = info.get("menu_cursor")
         current_target = info.get("menu_target")
@@ -180,5 +212,20 @@ class RewardSystem:
         self.last_menu_cursor = cursor
         self.last_menu_target = current_target
         self.last_menu_open = True
+        scale = menu_cfg.get("scale", 1.0)
         clip_value = menu_cfg.get("reward_clip", self.config.get("reward_clip", np.inf))
+        reward *= scale
         return float(np.clip(reward, -clip_value, clip_value))
+
+    @staticmethod
+    def _menu_active(info: Dict[str, Any]) -> bool:
+        """Consistent check for interactive menus across reward components."""
+        menu_open = info.get("menu_open")
+        has_options = info.get("menu_has_options")
+        if menu_open is None and has_options is None:
+            return False
+        if menu_open is None:
+            return bool(has_options)
+        if has_options is None:
+            return bool(menu_open)
+        return bool(menu_open and has_options)

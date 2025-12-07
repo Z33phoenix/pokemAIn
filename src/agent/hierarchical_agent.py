@@ -2,11 +2,24 @@ from typing import Any, Dict, Tuple, Optional
 
 import os
 import torch
+from pyboy.utils import WindowEvent
 
 from src.agent.director import Director
 from src.agent.specialists.nav_brain import CrossQNavAgent
-from src.agent.specialists.battle_brain import RainbowBattleAgent
+from src.agent.specialists.battle_brain import CrossQBattleAgent
 from src.agent.specialists.menu_brain import MenuBrain
+
+
+WINDOW_EVENT_TO_ACTION_ID = {
+    WindowEvent.PRESS_ARROW_DOWN: 0,
+    WindowEvent.PRESS_ARROW_LEFT: 1,
+    WindowEvent.PRESS_ARROW_RIGHT: 2,
+    WindowEvent.PRESS_ARROW_UP: 3,
+    WindowEvent.PRESS_BUTTON_A: 4,
+    WindowEvent.PRESS_BUTTON_B: 5,
+    WindowEvent.PRESS_BUTTON_START: 6,
+    WindowEvent.PRESS_BUTTON_SELECT: 7,
+}
 
 
 class HierarchicalAgent:
@@ -43,8 +56,9 @@ class HierarchicalAgent:
         }
 
         self.nav_brain = CrossQNavAgent(nav_cfg).to(self.device)
-        self.battle_brain = RainbowBattleAgent(battle_cfg).to(self.device)
+        self.battle_brain = CrossQBattleAgent(battle_cfg).to(self.device)
         self.menu_brain = MenuBrain(menu_cfg).to(self.device)
+        self.menu_open_action = self._resolve_menu_open_action()
         self.action_dim = action_dim
 
     def _zero_goal_embedding(self, dim: int) -> torch.Tensor:
@@ -55,6 +69,25 @@ class HierarchicalAgent:
         if goal_ctx is None:
             return self._zero_goal_embedding(self.menu_brain.goal_dim)
         return self.menu_brain.encode_goal(goal_ctx, device=self.device)
+
+    @staticmethod
+    def _info_menu_active(info: Dict[str, Any]) -> bool:
+        menu_open = info.get("menu_open")
+        has_options = info.get("menu_has_options")
+        if menu_open is None and has_options is None:
+            return False
+        if menu_open is None:
+            return bool(has_options)
+        if has_options is None:
+            return bool(menu_open)
+        return bool(menu_open and has_options)
+
+    def _resolve_menu_open_action(self) -> int | None:
+        """Return the local menu action index that maps to pressing START, if available."""
+        start_action_id = WINDOW_EVENT_TO_ACTION_ID.get(WindowEvent.PRESS_BUTTON_START)
+        if start_action_id is None:
+            return None
+        return self.menu_action_lookup.get(start_action_id)
 
     def get_action(
         self, obs, info: Dict[str, Any], epsilon: float
@@ -84,7 +117,7 @@ class HierarchicalAgent:
             if goal_ctx and goal_ctx.get("goal_type") == "menu":
                 goal_ctx = goal_ctx.copy()
                 goal_ctx.setdefault("metadata", {})
-                goal_ctx["metadata"]["menu_open"] = info.get("menu_open", False)
+                goal_ctx["metadata"]["menu_open"] = self._info_menu_active(info)
                 target = goal_ctx.get("target", {}) or {}
                 if "cursor" not in target and info.get("menu_cursor") is not None:
                     target = target.copy()
@@ -92,7 +125,15 @@ class HierarchicalAgent:
                     goal_ctx["target"] = target
                 action_meta["goal"] = goal_ctx
             goal_embedding = self._encode_menu_goal(goal_ctx)
-            local_action = self.menu_brain.get_action(features, goal_embedding)
+            menu_open = self._info_menu_active(info)
+            open_idx = self.menu_open_action
+            local_action = self.menu_brain.get_action(
+                features,
+                goal_embedding,
+                epsilon=min(epsilon, 0.2),
+                menu_open=menu_open,
+                open_action_index=open_idx,
+            )
             action = self.menu_actions[local_action]
             action_meta["local_action"] = local_action
             action_meta["goal_embedding"] = goal_embedding.detach()
@@ -106,18 +147,31 @@ class HierarchicalAgent:
         torch.save(self.menu_brain.state_dict(), os.path.join(checkpoint_dir, f"menu_brain_{tag}.pth"))
 
     def load(self, checkpoint_dir: str = "checkpoints", tag: str = "latest"):
+        def _safe_load(path: str):
+            if not os.path.exists(path):
+                return None
+            load_kwargs = {"map_location": self.device}
+            try:
+                return torch.load(path, weights_only=True, **load_kwargs)
+            except TypeError:
+                return torch.load(path, **load_kwargs)
+
         dir_path = os.path.join(checkpoint_dir, f"director_{tag}.pth")
         nav_path = os.path.join(checkpoint_dir, f"nav_brain_{tag}.pth")
         bat_path = os.path.join(checkpoint_dir, f"battle_brain_{tag}.pth")
         menu_path = os.path.join(checkpoint_dir, f"menu_brain_{tag}.pth")
-        if os.path.exists(dir_path):
-            self.director.load_state_dict(torch.load(dir_path, map_location=self.device))
-        if os.path.exists(nav_path):
-            self.nav_brain.load_state_dict(torch.load(nav_path, map_location=self.device))
-        if os.path.exists(bat_path):
-            self.battle_brain.load_state_dict(torch.load(bat_path, map_location=self.device))
-        if os.path.exists(menu_path):
-            self.menu_brain.load_state_dict(torch.load(menu_path, map_location=self.device))
+        director_state = _safe_load(dir_path)
+        if director_state is not None:
+            self.director.load_state_dict(director_state)
+        nav_state = _safe_load(nav_path)
+        if nav_state is not None:
+            self.nav_brain.load_state_dict(nav_state)
+        battle_state = _safe_load(bat_path)
+        if battle_state is not None:
+            self.battle_brain.load_state_dict(battle_state)
+        menu_state = _safe_load(menu_path)
+        if menu_state is not None:
+            self.menu_brain.load_state_dict(menu_state)
 
     def save_component(self, component: str, checkpoint_dir: str = "checkpoints", tag: str = "latest"):
         """Save a single module so we can cherry-pick the best brains across runs."""

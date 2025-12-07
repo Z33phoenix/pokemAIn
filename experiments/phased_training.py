@@ -34,34 +34,59 @@ PHASES = {"nav", "battle", "menu"}
 
 def _phase_reward(phase: str, components: Dict[str, float], training_cfg: Dict[str, Any]) -> float:
     """Combine global shaping with the phase-specific component."""
-    total = components.get("global_reward", 0.0)
-    if phase == "nav":
-        total += components.get("nav_reward", 0.0)
-    elif phase == "battle":
-        total += components.get("battle_reward", 0.0)
-    elif phase == "menu":
-        total += components.get("menu_reward", 0.0)
+    if phase == "menu":
+        total = components.get("menu_reward", 0.0)
+    else:
+        total = components.get("global_reward", 0.0)
+        if phase == "nav":
+            total += components.get("nav_reward", 0.0)
+        elif phase == "battle":
+            total += components.get("battle_reward", 0.0)
     clip = training_cfg.get("reward_clip", np.inf)
     return float(np.clip(total, -clip, clip))
 
 
 def _menu_goal_ctx(info: Dict[str, Any], menu_goal_defaults: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a goal context for menu-phase training from config defaults.
+
+    During phased menu training we treat director.goals.menu as the source of
+    truth for which menu entry / cursor position to target, instead of
+    echoing the currently-selected item from RAM. This gives the specialist a
+    stable objective per config.
     """
-    Normalize the goal context passed to the menu specialist so it can learn to
-    reach a specific cursor position / menu item.
-    """
+    # Prefer live cursor if available so the embedding still reflects coarse
+    # screen position, but fall back to configured defaults.
     target_cursor = info.get("menu_cursor")
     if target_cursor is None:
-        target_cursor = (menu_goal_defaults.get("cursor_row"), menu_goal_defaults.get("cursor_col"))
+        target_cursor = (
+            menu_goal_defaults.get("cursor_row"),
+            menu_goal_defaults.get("cursor_col"),
+        )
+
     return {
         "goal_type": "menu",
         "target": {
-            "menu_target": info.get("menu_target", menu_goal_defaults.get("menu_target")),
+            # Use the configured training target for menu-phase instead of the
+            # current RAM-selected item.
+            "menu_target": menu_goal_defaults.get("menu_target"),
             "cursor": target_cursor,
-            "menu_depth": info.get("menu_depth", menu_goal_defaults.get("menu_depth")),
+            "menu_depth": menu_goal_defaults.get("menu_depth"),
         },
-        "metadata": {"menu_open": info.get("menu_open", False)},
+        "metadata": {"menu_open": _menu_active(info)},
     }
+
+
+def _menu_active(info: Dict[str, Any]) -> bool:
+    """Return True when RAM reports an interactive menu with selectable entries."""
+    has_options = info.get("menu_has_options")
+    menu_open = info.get("menu_open")
+    if has_options is None and menu_open is None:
+        return False
+    if has_options is None:
+        return bool(menu_open)
+    if menu_open is None:
+        return bool(has_options)
+    return bool(menu_open and has_options)
 
 
 def _select_action(
@@ -85,7 +110,14 @@ def _select_action(
     else:
         goal_ctx = _menu_goal_ctx(info, menu_goal_defaults)
         goal_embedding = agent.menu_brain.encode_goal(goal_ctx, device=device)
-        local_action = agent.menu_brain.get_action(features, goal_embedding, epsilon=min(epsilon, 0.2))
+        menu_open = _menu_active(info)
+        local_action = agent.menu_brain.get_action(
+            features,
+            goal_embedding,
+            epsilon=min(epsilon, 0.2),
+            menu_open=menu_open,
+            open_action_index=getattr(agent, "menu_open_action", None),
+        )
         action = agent.menu_actions[local_action]
     return action, local_action, goal_ctx, goal_embedding
 
@@ -196,7 +228,15 @@ def train_phase(
     best_nav_loss = float("inf")
     best_battle_loss = float("inf")
     best_menu_loss = float("inf")
-    menu_goal_defaults = cfg.get("director", {}).get("goals", {}).get("menu", {})
+
+    # Menu goal defaults come from config but for menu-phase training we
+    # randomize the target item per episode so the specialist learns to move
+    # to arbitrary entries, not just a fixed slot.
+    menu_goal_defaults = cfg.get("director", {}).get("goals", {}).get("menu", {}).copy()
+    if phase == "menu":
+        last_index = info.get("menu_last_index")
+        if last_index is not None and last_index >= 0:
+            menu_goal_defaults["menu_target"] = int(np.random.randint(0, last_index + 1))
 
     pbar = tqdm(range(1, total_steps + 1))
 
@@ -213,8 +253,16 @@ def train_phase(
         )
         total_reward = _phase_reward(phase, reward_components, training_cfg)
 
+        nav_abort_reason = None
         nav_battle_abort = phase == "nav" and next_info.get("battle_active", False)
-        done = terminated or truncated or nav_battle_abort
+        if nav_battle_abort:
+            nav_abort_reason = "battle_active"
+        nav_menu_abort = phase == "nav" and _menu_active(next_info)
+        if nav_menu_abort and nav_abort_reason is None:
+            nav_abort_reason = "menu_detected"
+        battle_abort = phase == "battle" and not next_info.get("battle_active", False)
+        menu_abort = phase == "menu" and not _menu_active(next_info)
+        done = terminated or truncated or nav_battle_abort or nav_menu_abort or battle_abort or menu_abort
         episode_reward += total_reward
 
         goal_embedding_np = (
@@ -226,17 +274,23 @@ def train_phase(
         elif phase == "battle":
             battle_buffer.add(obs, local_action, total_reward, next_obs, done)
         else:
-            menu_buffer.add(
-                obs,
-                local_action,
-                total_reward,
-                next_obs,
-                done,
-                goal=goal_embedding_np,
-                next_goal=goal_embedding_np,
-                goal_ctx=goal_ctx,
-                next_goal_ctx=goal_ctx,
-            )
+            # For menu-phase training, only store transitions that are at least
+            # partly inside an interactive menu so the specialist does not
+            # learn from purely overworld states.
+            current_menu_active = _menu_active(info)
+            next_menu_active = _menu_active(next_info)
+            if current_menu_active or next_menu_active:
+                menu_buffer.add(
+                    obs,
+                    local_action,
+                    total_reward,
+                    next_obs,
+                    done,
+                    goal=goal_embedding_np,
+                    next_goal=goal_embedding_np,
+                    goal_ctx=goal_ctx,
+                    next_goal_ctx=goal_ctx,
+                )
 
         if step > warmup and step % fast_freq == 0:
             metrics: Dict[str, float] = {}
@@ -325,6 +379,32 @@ def train_phase(
             break
 
         if done:
+            if phase == "nav" and nav_abort_reason is not None:
+                debug_fields = {
+                    "reason": nav_abort_reason,
+                    "map_id": next_info.get("map_id"),
+                    "coords": (next_info.get("x"), next_info.get("y")),
+                    "menu_open": next_info.get("menu_open"),
+                    "menu_has_options": next_info.get("menu_has_options"),
+                    "menu_last_index": next_info.get("menu_last_index"),
+                    "menu_target": next_info.get("menu_target"),
+                }
+                #print(f"[DEBUG][NAV] Episode ended early: {debug_fields}")
+            if phase == "battle" and battle_abort:
+                battle_fields = {
+                    "reason": "battle_finished",
+                    "map_id": next_info.get("map_id"),
+                    "coords": (next_info.get("x"), next_info.get("y")),
+                    "hp_percent": next_info.get("hp_percent"),
+                }
+                #print(f"[DEBUG][BATTLE] Episode ended early: {battle_fields}")
+            if phase == "menu" and menu_abort:
+                menu_fields = {
+                    "reason": "menu_closed",
+                    "map_id": next_info.get("map_id"),
+                    "coords": (next_info.get("x"), next_info.get("y")),
+                }
+                #print(f"[DEBUG][MENU] Episode ended early: {menu_fields}")
             if episode_reward > best_episode_reward:
                 best_episode_reward = episode_reward
                 agent.save_component(phase, checkpoint_dir=checkpoint_dir, tag="best_reward")
@@ -336,6 +416,13 @@ def train_phase(
                 print(f"[WARN] Environment reset failed: {exc}")
                 break
             reward_sys.reset()
+
+            # Re-roll a fresh menu target for the next episode in menu-phase
+            # training based on the new menu length.
+            if phase == "menu":
+                last_index = info.get("menu_last_index")
+                if last_index is not None and last_index >= 0:
+                    menu_goal_defaults["menu_target"] = int(np.random.randint(0, last_index + 1))
 
         if step % save_freq == 0:
             agent.save_component("director", checkpoint_dir=checkpoint_dir, tag=save_tag)

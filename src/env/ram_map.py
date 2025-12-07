@@ -12,6 +12,8 @@ from typing import Tuple, Optional
 # -----------------------------------------------------------------------------
 HP_CURRENT = 0xD16C  # 2 bytes
 HP_MAX = 0xD16E  # 2 bytes
+ENEMY_HP_CURRENT = 0xCFE6  # 2 bytes (wEnemyMonHP)
+ENEMY_HP_MAX = 0xCFE8  # 2 bytes
 PARTY_SIZE = 0xD163  # 1 byte
 X_POS = 0xD362  # 1 byte
 Y_POS = 0xD361  # 1 byte
@@ -61,6 +63,11 @@ def _read_u16(memory, address: int) -> int:
 def read_player_hp(memory) -> Tuple[int, int]:
     """Returns (current_hp, max_hp) as integers."""
     return _read_u16(memory, HP_CURRENT), _read_u16(memory, HP_MAX)
+
+
+def read_enemy_hp(memory) -> Tuple[int, int]:
+    """Returns (current_hp, max_hp) for the opposing Pokemon."""
+    return _read_u16(memory, ENEMY_HP_CURRENT), _read_u16(memory, ENEMY_HP_MAX)
 
 
 def read_hp_fraction(memory) -> float:
@@ -128,12 +135,13 @@ def read_cursor_tile_pointer(memory) -> int:
 
 def is_menu_open(memory) -> bool:
     """
-    Heuristic: treat menus as open when the menu key bitmask is non-zero or
-    when a valid last-item index is present.
+    Heuristic: menus actively seize input by applying a key mask that differs
+    from the default 0xFF pass-through value and expose a non-zero menu item
+    count. Dialogue/text boxes leave the mask at 0xFF and report zero items.
     """
     key_mask = memory[MENU_KEY_BITMASK]
     last_item = memory[MENU_LAST_ITEM_ID]
-    return (key_mask != 0) or (last_item > 0)
+    return (key_mask != 0xFF) and (last_item > 0)
 
 
 def read_menu_target(memory) -> int:

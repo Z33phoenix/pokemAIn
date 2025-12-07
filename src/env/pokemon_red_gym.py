@@ -35,7 +35,6 @@ class PokemonRedGym(gym.Env):
         self.action_repeat = int(config.get("action_repeat", 24))
         self.release_frame = int(config.get("release_frame", 8))
         self.max_steps = int(config.get("max_steps", 2048))
-
         self.valid_actions = [
             WindowEvent.PRESS_ARROW_DOWN,
             WindowEvent.PRESS_ARROW_LEFT,
@@ -62,6 +61,8 @@ class PokemonRedGym(gym.Env):
         )
         self.memory = self.pyboy.memory
         self.state_buffers: List[Tuple[str, io.BytesIO]] = []
+        self._state_queue: List[int] = []
+        self._last_state_index: int | None = None
 
         default_state = os.path.join("states", "initial.state")
         requested_path = config.get("state_path", default_state)
@@ -90,7 +91,9 @@ class PokemonRedGym(gym.Env):
         reset_buffer = self._choose_reset_buffer()
         if reset_buffer is not None:
             self.pyboy.load_state(reset_buffer)
-        return self._get_obs(), self._get_info()
+        obs = self._get_obs()
+        info = self._get_info()
+        return obs, info
 
     def step(self, action: int):
         if self.window_closed:
@@ -123,8 +126,12 @@ class PokemonRedGym(gym.Env):
 
     def _get_info(self) -> Dict[str, Any]:
         hp_current, hp_max = ram_map.read_player_hp(self.memory)
+        enemy_hp_current, enemy_hp_max = ram_map.read_enemy_hp(self.memory)
         pos_x, pos_y = ram_map.read_player_position(self.memory)
-        menu_open = ram_map.is_menu_open(self.memory)
+        menu_last_index = ram_map.read_last_menu_item(self.memory)
+        menu_has_options = menu_last_index > 0
+        menu_open_flag = ram_map.is_menu_open(self.memory)
+        menu_open = bool(menu_open_flag)
         menu_cursor = ram_map.read_menu_cursor(self.memory)
         menu_target = ram_map.read_menu_target(self.memory)
         menu_depth = ram_map.read_menu_depth(self.memory)
@@ -137,10 +144,15 @@ class PokemonRedGym(gym.Env):
             "hp_percent": (hp_current / hp_max) if hp_max > 0 else 0.0,
             "hp_current": hp_current,
             "hp_max": hp_max,
+            "enemy_hp_percent": (enemy_hp_current / enemy_hp_max) if enemy_hp_max > 0 else 0.0,
+            "enemy_hp_current": enemy_hp_current,
+            "enemy_hp_max": enemy_hp_max,
             "menu_open": menu_open,
             "menu_cursor": menu_cursor,
             "menu_target": menu_target,
             "menu_depth": menu_depth,
+            "menu_has_options": menu_has_options,
+            "menu_last_index": menu_last_index,
         }
 
     def close(self):
@@ -184,6 +196,18 @@ class PokemonRedGym(gym.Env):
         """Return a BytesIO buffer for a randomly chosen state (or None if unavailable)."""
         if not self.state_buffers:
             return None
-        _, buffer = random.choice(self.state_buffers)
+        if not self._state_queue:
+            self._state_queue = list(range(len(self.state_buffers)))
+            random.shuffle(self._state_queue)
+            if (
+                self._last_state_index is not None
+                and len(self._state_queue) > 1
+                and self._state_queue[0] == self._last_state_index
+            ):
+                # Avoid immediately repeating the previous state when multiple options exist.
+                self._state_queue.append(self._state_queue.pop(0))
+        idx = self._state_queue.pop(0)
+        self._last_state_index = idx
+        _, buffer = self.state_buffers[idx]
         buffer.seek(0)
         return buffer

@@ -108,11 +108,18 @@ class MenuBrain(nn.Module):
         features: torch.Tensor,
         goal_embedding: Optional[torch.Tensor],
         epsilon: float = 0.1,
+        menu_open: bool = True,
+        open_action_index: Optional[int] = None,
     ) -> int:
         """
         Epsilon-greedy selection: deterministic when the Director demands a
-        precise menu target, exploratory otherwise.
+        precise menu target, exploratory otherwise. If the menu is closed and
+        an explicit open action is provided, force it so training stays inside
+        menu contexts.
         """
+        if not menu_open and open_action_index is not None:
+            return open_action_index
+
         if np.random.random() < epsilon:
             return np.random.randint(0, self.action_dim)
 

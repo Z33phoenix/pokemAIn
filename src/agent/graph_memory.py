@@ -1,7 +1,7 @@
 import cv2
 import networkx as nx
 import numpy as np
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 
 class GraphMemory:
@@ -23,9 +23,27 @@ class GraphMemory:
         self.max_nodes = max_nodes
         self.downsample_size = downsample_size
         self.quantization_step = quantization_step
+        self.seen_hashes: set[bytes] = set()
 
-    def get_state_hash(self, observation: Any) -> bytes:
-        """Compresses an observation tensor/array to an 8x8 hash."""
+    def get_state_hash(self, observation: Any, info: Optional[Dict[str, Any]] = None) -> bytes:
+        """
+        Derive a coarse hash for the agent's state. Prefer RAM-based map
+        coordinates so animated tiles sharing the same location collapse to a
+        single node. Fall back to vision hashing if coordinates are missing.
+        """
+        if info is not None:
+            map_id = info.get("map_id")
+            x = info.get("x")
+            y = info.get("y")
+            if map_id is not None and x is not None and y is not None:
+                return bytes(
+                    (
+                        int(map_id) & 0xFF,
+                        int(x) & 0xFF,
+                        int(y) & 0xFF,
+                    )
+                )
+
         if hasattr(observation, "cpu"):
             observation = observation.cpu().numpy()
 
@@ -42,14 +60,17 @@ class GraphMemory:
         quantized = (small // self.quantization_step) * self.quantization_step
         return quantized.tobytes()
 
-    def update(self, observation: Any, last_action: Optional[int]) -> Tuple[bytes, bool]:
+    def update(
+        self, observation: Any, info: Optional[Dict[str, Any]], last_action: Optional[int]
+    ) -> Tuple[bytes, bool]:
         """Registers the current observation and optional transition edge."""
-        state_hash = self.get_state_hash(observation)
-        is_new_state = False
+        state_hash = self.get_state_hash(observation, info=info)
+        is_new_state = state_hash not in self.seen_hashes
+        if is_new_state:
+            self.seen_hashes.add(state_hash)
 
         if not self.graph.has_node(state_hash):
             self.graph.add_node(state_hash, visits=1)
-            is_new_state = True
             if self.graph.number_of_nodes() > self.max_nodes:
                 self._prune_graph()
         else:

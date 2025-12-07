@@ -98,7 +98,7 @@ class Director(nn.Module):
         Forced action is populated when backtracking needs deterministic moves.
         """
         obs_cpu = obs.detach().cpu().numpy()
-        state_hash, is_new_state = self.graph.update(obs_cpu, last_action=None)
+        state_hash, is_new_state = self.graph.update(obs_cpu, info, last_action=None)
 
         self._update_goal_progress(info, is_new_state)
         features = self.encoder(obs)
@@ -141,18 +141,30 @@ class Director(nn.Module):
     ) -> str:
         if info.get("battle_active", False):
             return "train"
-        if info.get("menu_open", False):
+        if self._menu_active(info):
             return "menu"
 
-        if np.random.random() < epsilon and self.goal_types:
-            return np.random.choice(self.goal_types)
+        menu_open = self._menu_active(info)
+        goal_type_list = self.goal_types or []
 
-        if goal_logits.numel() == 0 or not self.goal_types:
+        if np.random.random() < epsilon and goal_type_list:
+            candidates = [g for g in goal_type_list if g != "menu"] if not menu_open else goal_type_list
+            return np.random.choice(candidates or goal_type_list)
+
+        if goal_logits.numel() == 0 or not goal_type_list:
             return "explore"
 
-        goal_idx = torch.argmax(goal_logits, dim=1).item()
-        goal_idx = max(0, min(goal_idx, len(self.goal_types) - 1))
-        return self.goal_types[goal_idx]
+        masked_logits = goal_logits.clone()
+        if not menu_open and "menu" in goal_type_list:
+            menu_idx = goal_type_list.index("menu")
+            masked_logits[:, menu_idx] = float("-inf")
+
+        goal_idx = torch.argmax(masked_logits, dim=1).item()
+        if masked_logits[0, goal_idx].isinf():
+            return "explore"
+
+        goal_idx = max(0, min(goal_idx, len(goal_type_list) - 1))
+        return goal_type_list[goal_idx]
 
     def _make_goal(self, goal_type: str, info: Dict[str, Any]) -> Goal:
         if goal_type == "train":
@@ -305,6 +317,18 @@ class Director(nn.Module):
             if goal.steps_spent >= goal.max_steps:
                 self._complete_active_goal("timeout")
         self.prev_battle_active = info.get("battle_active", False)
+
+    def _menu_active(self, info: Dict[str, Any]) -> bool:
+        """Return True when RAM exposes an interactive (non-dialogue) menu."""
+        menu_open = info.get("menu_open")
+        has_options = info.get("menu_has_options")
+        if menu_open is None and has_options is None:
+            return False
+        if menu_open is None:
+            return bool(has_options)
+        if has_options is None:
+            return bool(menu_open)
+        return bool(menu_open and has_options)
 
     def _apply_goal_bias(self, logits: torch.Tensor) -> torch.Tensor:
         if self.active_goal is None:

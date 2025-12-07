@@ -53,18 +53,27 @@ def _apply_overrides(
 ) -> Dict[str, Any]:
     """Return a shallow-copied config with the requested overrides applied."""
     cfg = cfg.copy()
+    env_cfg = cfg.get("environment", {}).copy()
+
     if headless is not None:
-        env_cfg = cfg.get("environment", {}).copy()
         env_cfg["headless"] = headless
-        cfg["environment"] = env_cfg
+
     if state_path_override:
-        env_cfg = cfg.get("environment", {}).copy()
         env_cfg["state_path"] = state_path_override
-        cfg["environment"] = env_cfg
+
+    effective_headless = env_cfg.get("headless")
+    if effective_headless is True:
+        env_cfg["emulation_speed"] = 0
+    elif effective_headless is False:
+        env_cfg["emulation_speed"] = 4
+
+    cfg["environment"] = env_cfg
+
     if total_steps_override is not None:
         training_cfg = cfg.get("training", {}).copy()
         training_cfg["total_steps"] = total_steps_override
         cfg["training"] = training_cfg
+
     return cfg
 
 
@@ -167,7 +176,7 @@ def train(
         )
         nav_total_reward = reward_components["global_reward"] + reward_components["nav_reward"]
         battle_total_reward = reward_components["global_reward"] + reward_components["battle_reward"]
-        menu_total_reward = reward_components["global_reward"] + reward_components["menu_reward"]
+        menu_total_reward = reward_components["menu_reward"]
         nav_total_reward = float(
             np.clip(nav_total_reward, -training_cfg.get("reward_clip", np.inf), training_cfg.get("reward_clip", np.inf))
         )
