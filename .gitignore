@@ -20,3 +20,6 @@ venv/
 experiments/logs/
 checkpoints/
 states/
+
+# Agents
+WARP.md
