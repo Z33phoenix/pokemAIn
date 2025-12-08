@@ -1,97 +1,75 @@
-# Pokemon Red Hierarchical RL Agent
+# Pokémon Red RL + LLM Goals
 
-A hierarchical RL stack for Pokemon Red built on PyBoy. A shared vision encoder feeds a **Director** that routes control to phase-specific **Specialists** (navigation, battle, menu). Training is phased around curated save states so each specialist masters its domain before full integration.
+Single-agent RL controller for Pokémon Red guided by a local, text-only LLM that sets high-level navigation goals. No vision to the LLM—only clean JSON summaries. The RL agent handles all button presses; the LLM provides concise goals via Ollama.
 
-## What the AI Looks Like
-- **Director (`src/agent/director.py`)**: Chooses a goal (explore, train, survive, menu) and biases routing to the right specialist. Maintains a lightweight graph for novelty and basic goal bookkeeping.
-- **Navigation Brain (`src/agent/specialists/agent.py`)**: CrossQ-style DQN head for overworld movement. Episodes auto-end if a battle starts to keep nav clean. Map connection data from RAM is exposed to rewards to encourage purposeful exploration.
-- Warp-aware: map header connection data and warp tiles are exposed in `info` and navigation rewards bonus hitting warp tiles to enter/exit buildings.
-- **Battle Brain (`src/agent/specialists/battle_brain.py`)**: Distributional (Rainbow-like) head with NoisyLinear exploration for fights.
-- **Menu Brain (`src/agent/specialists/menu_brain.py`)**: Goal-conditioned DQN that learns to open/start menus and move the cursor to targets (bag, party, PC, or START).
-- **Environment (`src/env/pokemon_red_gym.py`)**: Gymnasium wrapper around PyBoy; pulls only rewards/signals from RAM; supports multiple starting states per phase and handles user window close gracefully.
-- **Rewards (`src/env/rewards.py`)**: Configurable shaping for nav/battle/menu with menu-open bonuses and exploration/battle heuristics wired through `ram_map.py`.
-
-## Entry Points You Should Use
-- Full stack: `python experiments/train_end_to_end.py`
-- Single specialist pretraining: `python experiments/train_nav_phase.py`, `train_battle_phase.py`, or `train_menu_phase.py` (all route through `experiments/phased_training.py`)
-- Parallel workers + best-brain combiner: `python experiments/train_multi_agent.py`
-- State capture helper: `python setup_game.py`
-
-## Notes on Optional/Legacy Files
-- `watch_agent.py` is a legacy visualization stub; the environment now requires a config dict. It remains for reference but is not part of the training flow.
-- `main.py` is only a placeholder docstring; there is no CLI wired there today.
-- `config/walkthrough.json` is provided for future walkthrough-aware goals but is not currently consumed anywhere.
-- `config/ModelFile.txt` defines the prompt for a local LLM (e.g., Ollama) used by `PokemonGoalLLM`; keep it in sync with your local model even though the code does not read it directly.
-- Battle/Menu specialists remain in the tree, but the current focus is letting the navigation agent run the game end-to-end.
-
-## Repository Layout
-- `config/hyperparameters.yaml`: Central training and env settings (state paths, replay sizes, reward weights).
-- `experiments/`: Training entry points (`train_*_phase.py`, `train_end_to_end.py`, `train_multi_agent.py`) plus shared `phased_training.py`.
-- `setup_game.py`: Interactive state capture tool; saves to `states/<phase>/...` with optional metadata sidecars.
-- `src/agent/`: Director, graph memory, hierarchical agent wiring, and specialists.
-- `src/env/`: Gym wrapper, RAM map helpers, reward shaping.
-- `src/utils/`: Replay buffer, logging utilities.
+## What’s Here
+- `train.py` — Main training loop with per-goal episodes, ratcheted checkpoints, and synchronous LLM goal requests.
+- `src/agent/agent.py` — CrossQ-style navigation agent (the only neural net).
+- `src/agent/goal_llm.py` — HTTP client for the LLM endpoint (`/api/chat`).
+- `src/agent/director.py` — Builds JSON state summaries, sanitizes LLM goals, and routes them to the agent.
+- `src/agent/quest_manager.py` — Simple stage tracking and checkpoint paths for the “ratchet” progression.
+- `src/env/pokemon_red_gym.py` — PyBoy gym wrapper with save/load state support.
+- `config/ModelFile.txt` — Ollama model definition and system prompt for the goal-setter.
+- `config/hyperparameters.yaml` — Training, rewards, agent, and LLM configuration.
+- `config/walkthrough_steps.json` — Minimal stage progression (extend as needed).
 
 ## Prerequisites
-- Python 3.10+ recommended.
+- Python 3.10+ and PyTorch (CUDA optional).
 - `pokemon_red.gb` in the project root.
-- Optional GPU (CUDA) for faster training.
-- Install deps: `pip install -r requirements.txt` (consider a venv/conda env).
+- Ollama installed and running (`ollama serve`).
 
-## Installation
-```bash
-git clone <repo>
-cd pokemAIn
-pip install -r requirements.txt
+## Ollama Setup
+1) Start Ollama:
 ```
-Ensure `pokemon_red.gb` is present in the repo root before running anything.
+ollama serve
+```
+2) Build the goal model from `config/ModelFile.txt`:
+```
+ollama create pokemon-goal -f config/ModelFile.txt
+```
+3) The default endpoint is `http://localhost:11434/api/chat` (matches `goal_llm.api_url` in `config/hyperparameters.yaml`).
 
-## Capturing Training States
-Phased training relies on curated starting points:
-1) Run `python setup_game.py`.
-2) Play to the scenario you want (route, trainer battle, menu, or no-menu to train opening START).
-3) Close the PyBoy window when ready; you will be prompted to pick a phase (nav/battle/menu/full).
-4) States are auto-saved under `states/<phase>/<phase>_YYYYMMDD-HHMMSS.state` with optional `.meta.json`.
+## Running Training
+```
+python train.py --run-name <NAME> --state-path states/initial.state
+```
+Behavior:
+- Waits for an LLM goal before acting.
+- Each goal is an episode. Success may continue without reset; failure/timeout reloads the latest stage checkpoint (ratchet).
+- Map changes trigger a fresh LLM poll and clear stale micro-goals.
+- Progress bar shows reward, episode count, and current goal. Logs to `experiments/logs/<run>_*`.
 
-Tips:
-- Use `--resume-from` to branch from an existing state (e.g., `states/initial.state`).
-- `states/` is ignored by git; keep your local captures there.
+## Config Highlights (`config/hyperparameters.yaml`)
+- `goal_llm`: `enabled`, `api_url`, `model` (`pokemon-goal`), `timeout`, `debug`.
+- `agent`: learning rate, gamma, allowed_actions, input_dim (96x96 flattened).
+- `rewards`: shaping, goal bonuses, timeout penalty.
+- `saves_dir`: where ratchet checkpoints are stored (default `saves/`).
 
-## Training Workflows
-Single-phase specialists (uses random state selection from the provided directory):
-- Navigation: `python experiments/train_nav_phase.py --state-path states/nav --run-name nav001`
-- Battle: `python experiments/train_battle_phase.py --state-path states/battle --run-name bat001`
-- Menu: `python experiments/train_menu_phase.py --state-path states/menu --run-name menu001`
+## State Summary Sent to the LLM
+After the first hardcoded startup prompt, every request includes:
+```
+{
+  "location": { "map_name", "map_id", "x", "y", "nearby_sprites": [...] },
+  "party": [...],
+  "inventory": { "key_items": [...], "hms_owned": [...], "items": [...] },
+  "game_state": { "badges", "money", "battle_status" },
+  "last_goal": { "target", "status" }
+}
+```
+The LLM returns JSON with `goal_type`, `target_map_name` (or `target_location_name`), and optional metadata. The code sanitizes and enqueues the goal.
 
-Multi-agent scale-out (spawns N workers and can combine best brains):
-```bash
-python experiments/train_multi_agent.py --phase nav --state-path states/nav --num-agents 4 --combine-best
+## Testing the Endpoint Manually (CMD)
+```
+curl -X POST "http://localhost:11434/api/chat" -H "Content-Type: application/json" -d "{\"model\":\"pokemon-goal\",\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"{\\\"location\\\":{\\\"map_name\\\":\\\"Red's house 2F\\\",\\\"map_id\\\":38,\\\"x\\\":3,\\\"y\\\":6,\\\"nearby_sprites\\\":[]},\\\"party\\\":[],\\\"inventory\\\":{\\\"key_items\\\":[],\\\"hms_owned\\\":[],\\\"items\\\":[]},\\\"game_state\\\":{\\\"badges\\\":0,\\\"money\\\":3000,\\\"battle_status\\\":\\\"Overworld\\\"},\\\"last_goal\\\":{\\\"target\\\":\\\"Start Game\\\",\\\"status\\\":\\\"New\\\"}}\"}]}"
 ```
 
-Full integration (director + all specialists together):
-```bash
-python experiments/train_end_to_end.py --state-path states/initial.state --run-name full001
-# or via multi-agent
-python experiments/train_multi_agent.py --phase full --num-agents 2
-```
-
-Notes:
-- Navigation episodes terminate early if a battle begins; supply varied nav states that avoid battles when possible.
-- Menu rewards include a small bonus for being inside a menu to encourage opening START when needed.
-- Closing the PyBoy window mid-run will end the episode and can stop training cleanly.
-
-## Checkpoints and Logs
-- Checkpoints: `checkpoints/<run_name>/` (director + specialist weights; per-phase best tags when available).
-- Logs: `experiments/logs/<run_name>/` (TensorBoard scalars).
-- Multi-agent runs write aggregated summaries to `checkpoints/<prefix>/run_summaries.json`; combined best brains land in `checkpoints/<prefix>/combined_best` when `--combine-best` is used.
-
-## Configuration
-Tune `config/hyperparameters.yaml` for:
-- Environment paths (`state_path`, `phase_states`), emulation speed, action repeat, headless vs windowed.
-- Replay sizes per phase, epsilon schedule, reward weights, and menu shaping.
-- Specialist action sets and learning rates; director goal biases and graph memory sizing.
+## Checkpoints and Ratchet
+- Stage checkpoints saved to `saves/stage_<idx>.state` when a stage completes (QuestManager).
+- Agent checkpoints under `experiments/<run>/agent_brain_latest.pth`.
+- TensorBoard logs under `experiments/logs/<run>_*`.
 
 ## Troubleshooting
-- If a reset fails with “PyBoy window is closed,” restart the script; closing the window signals termination.
-- Ensure `states/initial.state` exists for full training; recreate via `python setup_game.py` if needed.
-- On Windows, SDL2 warnings are expected when using `pysdl2-dll`; training should proceed.
+- If stuck with no goal: ensure `ollama serve` is running and the `pokemon-goal` model exists.
+- Enable LLM debug in `hyperparameters.yaml` to print requests/responses.
+- Map-change loops: we re-poll immediately and clear stale goals; no retry delay.
+

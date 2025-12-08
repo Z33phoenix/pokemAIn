@@ -20,57 +20,57 @@ You must categorize your plan into one of these six types:
 2. GET POKEMON: Inside Oak's Lab, INTERACT with the Pokeballs to choose a starter -> Try to leave the Lab -> Defeat the Rival (BATTLE).
 3. TO VIRIDIAN: Exit Lab to Pallet Town -> Go North to Route 1 -> Enter Viridian City.
 4. PARCEL QUEST: Go to Viridian City PokeMart -> Get OAK'S PARCEL -> Exit Mart.
-5. RETURN TO LAB: Go South to Route 1 -> Go South to Pallet Town -> Enter Oak's Lab -> Talk to Oak (INTERACT) to deliver Parcel -> Get Pokedex.
-6. FIRST BADGE JOURNEY: Leave Lab -> Pallet Town -> Route 1 -> Viridian City -> Go West to Route 22 -> Defeat Rival (Optional) -> Return to Viridian City -> Go North to Route 2.
-7. VIRIDIAN FOREST: Enter Building (Gatehouse) -> Enter Viridian Forest -> Navigate North/West through forest -> Exit North to Route 2 (North Side) -> Enter Pewter City.
-8. BROCK: Enter Pewter Gym (INTERACT with door if needed) -> Defeat Junior Trainer -> Defeat Brock (BATTLE) -> Get Badge.
+5. RETURN TO LAB: Go South to Route 1 -> Pallet Town -> Oak's Lab -> Talk to Oak (INTERACT) -> Get Pokedex.
+6. FIRST BADGE JOURNEY: Leave Lab -> Route 1 -> Viridian City -> Route 22 (West) -> Fight Rival (Optional) -> Viridian City -> Route 2 (North).
+7. VIRIDIAN FOREST: Enter Gatehouse -> Viridian Forest -> Route 2 (North Side) -> Pewter City.
+8. BROCK: Pewter Gym -> Fight Trainer -> Defeat Brock (BATTLE) -> Get Badge.
 
 # --- MT MOON TO CERULEAN ---
-9. TO MT MOON: Leave Gym -> Go East to Route 3 -> Traverse Route 3 East -> Enter Pokemon Center (Heal if needed) -> Enter Mt Moon 1F.
-10. MT MOON DEPTHS: Go to Northeast Ladder -> Go down to B1F -> Go to Northwest Ladder -> Go down to B2F -> Navigate East -> Defeat Super Nerd (Choose Fossil) -> Navigate West to Exit Ladder -> Mt Moon 1F (Exit Side) -> Exit to Route 4.
-11. CERULEAN CITY: Traverse Route 4 East -> jump ledges (do not go back up) -> Enter Cerulean City.
-12. MISTY: Enter Cerulean Gym -> Defeat Trainers -> Defeat Misty (BATTLE) -> Get Badge.
+9. TO MT MOON: Route 3 (East) -> Pokemon Center -> Mt Moon 1F.
+10. MT MOON DEPTHS: Mt Moon 1F -> Ladder to B1F -> Ladder to B2F -> Defeat Super Nerd (Choose Fossil) -> Exit Ladder -> Mt Moon 1F -> Route 4.
+11. CERULEAN CITY: Route 4 (East) -> Jump Ledges -> Cerulean City.
+12. MISTY: Cerulean Gym -> Defeat Trainers -> Defeat Misty (BATTLE) -> Get Badge.
 
 # --- THE SS ANNE ARC ---
-13. NUGGET BRIDGE: Go North to Route 24 (Nugget Bridge) -> Defeat 5 Trainers -> Defeat Rocket Grunt -> Go East to Route 25.
-14. BILL'S HOUSE: Traverse Route 25 East -> Enter Sea Cottage (Bill's House) -> Talk to Clefairy (INTERACT) -> Talk to Bill (INTERACT) -> Get S.S. TICKET -> Return to Cerulean City.
-15. TO VERMILION: Enter Robbed House (Northeast Cerulean) -> Exit rear door -> Go South to Route 5 -> Enter Underground Path (North Entrance) -> Traverse Tunnel -> Exit Underground Path (South Entrance) -> Go South to Route 6 -> Enter Vermilion City.
-16. SS ANNE: Go South to Vermilion Harbor -> Enter S.S. Anne -> Go Left/Down to Kitchen -> Get GREAT BALL (Optional) -> Go to Captain's Quarters (Far right corridor, up stairs) -> Rub Captain's Back (INTERACT) -> Get HM01 (CUT).
-17. LT SURGE: Leave S.S. Anne -> Teach HM01 (CUT) (MENU) -> Go to Vermilion Gym (Southwest) -> Cut Tree -> Solve Trash Can Puzzle (INTERACT) -> Defeat Lt. Surge (BATTLE) -> Get Badge.
+13. NUGGET BRIDGE: Route 24 (North) -> Defeat 5 Trainers -> Defeat Rocket Grunt -> Route 25 (East).
+14. BILL'S HOUSE: Route 25 -> Bill's House -> Talk to Clefairy (INTERACT) -> Talk to Bill (INTERACT) -> Get S.S. TICKET -> Cerulean City.
+15. TO VERMILION: Robbed House (Cerulean) -> Route 5 -> Underground Path (North) -> Underground Path (South) -> Route 6 -> Vermilion City.
+16. SS ANNE: Vermilion Harbor -> S.S. Anne -> Captain's Quarters -> Rub Captain's Back (INTERACT) -> Get HM01 (CUT).
+17. LT SURGE: Teach HM01 (MENU) -> Vermilion Gym -> Cut Tree -> Trash Can Puzzle (INTERACT) -> Defeat Lt. Surge (BATTLE) -> Get Badge.
 
 # --- ROCK TUNNEL TO CELADON ---
-18. RETURN TO CERULEAN: Go North to Route 6 -> Underground Path -> Route 5 -> Cerulean City -> Go East to Route 9 (Cut Tree required).
-19. ROCK TUNNEL: Traverse Route 9 East -> Route 10 -> Enter Rock Tunnel 1F -> Navigate to Ladder -> B1F -> Navigate to Exit -> Route 10 (South Side) -> Go South to Lavender Town.
-20. TO CELADON: Go West to Route 8 -> Enter Underground Path (East Entrance) -> Traverse Tunnel -> Exit Underground Path (West Entrance) -> Route 7 -> Enter Celadon City.
-21. ERIKA: Enter Celadon Gym (Southern Tree area) -> Cut Tree -> Navigate Maze -> Defeat Erika (BATTLE) -> Get Badge.
+18. RETURN TO CERULEAN: Route 6 -> Underground Path -> Route 5 -> Cerulean City -> Route 9 (East).
+19. ROCK TUNNEL: Route 9 -> Route 10 -> Rock Tunnel 1F -> Rock Tunnel B1F -> Route 10 (South) -> Lavender Town.
+20. TO CELADON: Route 8 (West) -> Underground Path -> Route 7 -> Celadon City.
+21. ERIKA: Celadon Gym -> Cut Tree -> Maze -> Defeat Erika (BATTLE) -> Get Badge.
 
 # --- ROCKET HIDEOUT & POKEMON TOWER ---
-22. GAME CORNER: Enter Celadon Game Corner -> Inspect Poster (INTERACT) -> Enter Rocket Hideout B1F.
-23. SILPH SCOPE: Navigate B1F -> B2F (Spin Puzzles) -> B3F -> B4F -> Defeat Giovanni (BATTLE) -> Get SILPH SCOPE.
-24. POKEMON TOWER: Return to Celadon -> Route 7 -> Underground Path -> Route 8 -> Lavender Town -> Enter Pokemon Tower.
-25. GHOSTS: Climb Tower -> Defeat Rival (2F) -> Navigate to Top Floor -> Defeat Ghost Marowak (BATTLE) -> Defeat Rocket Grunts -> Rescue Mr. Fuji -> Get POKE FLUTE.
+22. GAME CORNER: Celadon Game Corner -> Inspect Poster (INTERACT) -> Rocket Hideout B1F.
+23. SILPH SCOPE: Hideout B1F -> B2F -> B3F -> B4F -> Defeat Giovanni (BATTLE) -> Get SILPH SCOPE.
+24. POKEMON TOWER: Route 7 -> Underground Path -> Route 8 -> Lavender Town -> Pokemon Tower.
+25. GHOSTS: Tower 2F (Rival) -> Tower Top Floor -> Defeat Marowak (BATTLE) -> Defeat Grunts -> Rescue Fuji (INTERACT) -> Get POKE FLUTE.
 
 # --- SAFARI ZONE & FUCHSIA ---
-26. WAKE SNORLAX: Go West of Celadon to Route 16 -> Cut Tree -> Go West -> Wake Snorlax (MENU: POKE FLUTE) -> Enter Gatehouse -> Get HM02 (FLY) (House beyond Snorlax).
-27. CYCLING ROAD: Go West through Gate -> Route 17 (Cycling Road) -> Go South -> Route 18 -> Go East -> Fuchsia City.
-28. SAFARI ZONE: Enter Safari Zone (North Fuchsia) -> Go to Area 1 -> Go to Area 2 -> Go to Area 3 -> Find Gold Teeth (SEARCH) -> Find Secret House -> Get HM03 (SURF).
-29. KOGA: Enter Fuchsia Gym -> Navigate Invisible Walls -> Defeat Koga (BATTLE) -> Get Badge.
-30. STRENGTH: Go to Warden's House (Southeast Fuchsia) -> Give Gold Teeth (INTERACT) -> Get HM04 (STRENGTH).
+26. WAKE SNORLAX: Route 16 (West) -> Wake Snorlax (MENU: POKE FLUTE) -> Gatehouse -> Get HM02 (FLY).
+27. CYCLING ROAD: Gatehouse -> Route 17 (Cycling Road) -> Route 18 -> Fuchsia City.
+28. SAFARI ZONE: Safari Zone (North Fuchsia) -> Area 1 -> Area 2 -> Area 3 -> Find Gold Teeth (SEARCH) -> Secret House -> Get HM03 (SURF).
+29. KOGA: Fuchsia Gym -> Invisible Walls -> Defeat Koga (BATTLE) -> Get Badge.
+30. STRENGTH: Warden's House (Fuchsia) -> Give Gold Teeth (INTERACT) -> Get HM04 (STRENGTH).
 
 # --- SILPH CO & CINNABAR ---
-31. SILPH CO: Open Menu -> Teach HM02 (FLY) (MENU) -> Fly to Saffron City (or Walk via Route 15/Gate/Tea Guard) -> Enter Silph Co Building.
-32. MASTER BALL: Navigate to 5F -> Get Card Key (SEARCH) -> Open Doors -> Navigate to 3F Teleporter -> Rival Fight -> Giovanni Fight -> Get MASTER BALL.
-33. SABRINA: Enter Saffron Gym -> Navigate Teleporters -> Defeat Sabrina (BATTLE) -> Get Badge.
-34. TO CINNABAR: Open Menu -> Teach HM03 (SURF) (MENU) -> Fly to Pallet Town -> Surf South (Route 21) -> Land on Cinnabar Island.
-35. MANSION: Enter Pokemon Mansion -> Find Secret Key (SEARCH) in Basement (Switch Puzzles).
-36. BLAINE: Enter Cinnabar Gym (Unlock with Key) -> Answer Quiz Machines (INTERACT) -> Defeat Blaine (BATTLE) -> Get Badge.
+31. SILPH CO: Teach HM02 (MENU) -> Fly to Saffron City -> Silph Co Building.
+32. MASTER BALL: Silph Co 5F -> Get Card Key (SEARCH) -> 3F Teleporter -> Rival Fight -> Giovanni Fight -> Get MASTER BALL.
+33. SABRINA: Saffron Gym -> Teleporters -> Defeat Sabrina (BATTLE) -> Get Badge.
+34. TO CINNABAR: Teach HM03 (MENU) -> Fly to Pallet Town -> Route 21 (Surf South) -> Cinnabar Island.
+35. MANSION: Pokemon Mansion -> Basement -> Find Secret Key (SEARCH).
+36. BLAINE: Cinnabar Gym -> Quiz Machines (INTERACT) -> Defeat Blaine (BATTLE) -> Get Badge.
 
 # --- THE ENDGAME ---
-37. GIOVANNI: Fly to Viridian City -> Enter Viridian Gym -> Navigate Spin Tiles -> Defeat Giovanni (BATTLE) -> Get Badge.
-38. VICTORY ROAD: Go West to Route 22 -> Defeat Rival -> Enter Badge Gates -> Enter Victory Road 1F.
-39. BOULDERS: Navigate 1F (Push Boulder on Switch) -> 2F (Push Boulder) -> 3F (Push Boulder) -> Exit to Indigo Plateau.
-40. ELITE FOUR: Enter Lorelei's Room -> Defeat Lorelei -> Enter Bruno's Room -> Defeat Bruno -> Enter Agatha's Room -> Defeat Agatha -> Enter Lance's Room -> Defeat Lance.
-41. CHAMPION: Enter Final Room -> Defeat Rival (BATTLE) -> Become Champion.
+37. GIOVANNI: Fly to Viridian City -> Viridian Gym -> Spin Tiles -> Defeat Giovanni (BATTLE) -> Get Badge.
+38. VICTORY ROAD: Route 22 (West) -> Defeat Rival (BATTLE) -> Badge Gates -> Victory Road 1F.
+39. BOULDERS: Victory Road 1F -> 2F -> 3F -> Indigo Plateau.
+40. ELITE FOUR: Lorelei -> Bruno -> Agatha -> Lance (BATTLE all).
+41. CHAMPION: Final Room -> Defeat Rival (BATTLE) -> Become Champion.
 
 ### 3. OUTPUT FORMAT
 You must respond with a SINGLE JSON OBJECT. Do not write explanations outside the JSON.
