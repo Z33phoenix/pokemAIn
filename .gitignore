@@ -17,8 +17,8 @@ venv/
 *.gbc
 *.ram
 *.state
+*.pth
 experiments/logs/
-checkpoints/
 states/
 
 # File Ignores
