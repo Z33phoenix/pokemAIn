@@ -5,7 +5,7 @@ import numpy as np
 class NatureCNN(nn.Module):
     """
     Standard DQN Feature Extractor (Mnih et al. 2015).
-    Input: (B, 1, 84, 84)
+    Input: (B, 1, 96, 96)
     Output: (B, 512) feature vector
     """
     def __init__(self, input_channels=1, features_dim=512):
@@ -30,7 +30,7 @@ class NatureCNN(nn.Module):
 
         # Compute shape by passing a dummy tensor
         with torch.no_grad():
-            dummy = torch.zeros(1, input_channels, 84, 84)
+            dummy = torch.zeros(1, input_channels, 96, 96)
             n_flatten = self.cnn(dummy).shape[1]
 
         self.linear = nn.Sequential(
@@ -39,7 +39,7 @@ class NatureCNN(nn.Module):
         )
 
     def forward(self, x):
-        """Return a 512-dim feature vector from a (B, 1, 84, 84) input tensor."""
+        """Return a 512-dim feature vector from a (B, 1, 96, 96) input tensor."""
         if x.max() > 1.0:
              x = x / 255.0
 

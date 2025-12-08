@@ -1,0 +1,6 @@
+[
+  { "name": "1. START", "condition": { "type": "map_id", "value": 12 } },
+  { "name": "2. RETURN TO PALLET", "condition": { "type": "map_id", "value": 0 } },
+  { "name": "3. GET POKEDEX", "condition": { "type": "item", "value": "POKEDEX" } },
+  { "name": "4. TO VIRIDIAN", "condition": { "type": "map_id", "value": 1 } }
+]

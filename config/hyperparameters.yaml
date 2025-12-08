@@ -4,10 +4,6 @@
 environment:
   rom_path: pokemon_red.gb
   state_path: states/initial.state
-  phase_states:
-    nav: states/nav      # directory of nav starting states (.state files)
-    battle: states/battle  # directory of battle-focused states
-    menu: states/menu    # directory of menu-focused states
   headless: false
   emulation_speed: 5
   action_repeat: 24
@@ -28,16 +24,6 @@ training:
     start: 0.9
     end: 0.05
     decay: 50000
-  replay:
-    nav:
-      size: 100000
-      alpha: 0.2
-    battle:
-      size: 100000
-      alpha: 0.6
-    menu:
-      size: 100000  # Slightly smaller as menu interactions are faster/less varied
-      alpha: 0.5
 
 # =============================================================================
 # Rewards
@@ -54,48 +40,15 @@ rewards:
   # --- Navigation shaping ---
   new_tile: 0.2
   new_map: 2.0
-  wall_bump: -0.1
-  stale_penalty: -0.2
+  nav_new_connection: 3.0   # Bonus for first traversal of a unique map-to-map edge (warp or boundary)
+  nav_connection_edge: 0.5     # Bonus for reaching an edge that connects to another map
+  nav_connection_discovery: 0.5  # Bonus once per map for having connection data available
+  nav_warp: 1.0                # Bonus for stepping onto a warp tile (door/stair transition)
+  nav_warp_proximity: 0.05     # Small shaping toward known warp tiles (scaled by Manhattan distance)
+  wall_bump: -0.2
+  stale_penalty: -0.3
   stale_threshold: 120
-  nav_menu_open_bonus: 1.0
   direction_follow_bonus: 0.5  # Scales reward for moving along goal_vector direction (dot product)
-
-  # --- Battle shaping ---
-  battle_tick: 0.0
-  battle_win: 5.0
-  battle_loss: -5.0
-  battle_loss_threshold: 0.1
-  battle_damage: 4.0
-  battle_damage_taken: -3.0
-  battle_hp_high_bonus: 0.1
-  battle_hp_high_threshold: 0.75
-
-  # --- Menu shaping ---
-  menu:
-    opened_menu: 1.0       # Bonus when entering any menu (bag/PC/party/START)
-    open_bonus: 0.2        # Small per-step bonus for staying inside a menu
-    inactive_penalty: -1.0 # Constant penalty while not in a menu to avoid positive drift
-    cursor_move: 0.1
-    correct_target: 1.0
-    cursor_on_target: 0.5
-    stale_penalty: -0.1
-    stale_threshold: 48
-    close_penalty: -1.0    # Applied when a menu closes without action (stops spam)
-    scale: 0.01            # Normalize raw menu rewards (divide by 100)
-    reward_clip: 1.0
-
-  # --- Explicit goal bonuses (added on top of other rewards) ---
-  goal_bonus:
-    explore:
-      map_match: 1.0
-      coordinate_match: 0.5
-    train:
-      battle_complete: 2.0
-    survive:
-      hp_recovered: 1.0
-    menu:
-      menu_reached: 0.5
-      cursor_match: 0.3
 
 # =============================================================================
 # Director
@@ -107,97 +60,27 @@ director:
   num_specialists: 3
   router_hidden_dim: 64
 
-  goal_head_types:
-    - explore   # Focus: Uncovering the map
-    - train     # Focus: Leveling up and fighting
-    - survive   # Focus: Healing and Party Management
-    - menu      # Focus: Deterministic menu interactions (bag, party, options)
-
-  goal_bias:
-    explore: 0.6
-    train: 0.3
-    survive: 0.1  # Should be reactive (triggered by low HP state)
-
-  goal_specialist_map:
-    explore: 0  # Navigation Brain
-    train: 1    # Battle Brain
-    survive: 2  # Menu Brain or Navigation Brain (if no items)
-    menu: 2     # Explicit menu goal routing
-
-  goals:
-    explore:
-      priority: 0
-      novel_states: 10
-      max_steps: 2048
-      reward_focus: "new_tile"
-    train:
-      priority: 10
-      xp_gained: 100
-      battles_won: 1
-      max_steps: 1024
-      reward_focus: "level_up"
-    survive:
-      priority: 5
-      hp_threshold: 0.3
-      hp_target: 0.9
-      max_steps: 512
-      reward_focus: "heal_success"
-    menu:
-      priority: 5
-      max_steps: 128
-      menu_target: 0
-      cursor_row: 0
-      cursor_col: 0
-      menu_depth: 0
-      reward_focus: "menu"
-
   graph:
     max_nodes: 5000
     downsample_size: 8
     quantization_step: 32
-  goal_llm:
-    enabled: True
-    api_url: http://localhost:11434/api/chat
-    model: pokemon-goal
-    timeout: 5.0
-    retry_interval: 32  # steps between retries when no active/queued goal
-    walkthrough_path: config/walkthrough.json  # Provided for future walkthrough-aware goals; currently unused
-  router_pretrain_path: checkpoints/director_router_pretrained.pth
+
+agent:
+  learning_rate: 0.0003
+  gamma: 0.98
+  allowed_actions: [0, 1, 2, 3, 4, 5]  # Arrows, A, B
+
+goal_llm:
+  enabled: True
+  api_url: http://localhost:11434/api/chat
+  model: pokemon-goal
+  timeout: 50.0
+  retry_interval: 32  # steps between retries when no active/queued goal
+  walkthrough_path: config/walkthrough.json  # Provided for future walkthrough-aware goals; currently unused
+  debug: True
+router_pretrain_path: checkpoints/director_router_pretrained.pth
 
 # =============================================================================
-# Specialists
+# Debug
 # =============================================================================
-specialists:
-  navigation:
-    learning_rate: 0.00001
-    gamma: 0.98
-    allowed_actions: [0, 1, 2, 3, 4, 5]  # Arrows, A, B
-
-  battle:
-    learning_rate: 0.0001
-    gamma: 0.99
-    allowed_actions: [0, 1, 2, 3, 4, 5]  # Arrows, A, B
-
-  menu:
-    learning_rate: 0.0000005
-    gamma: 0.95  # Lower gamma: Menu tasks are short-horizon
-    hidden_dim: 256
-    goal_dim: 4
-    allowed_actions: [0, 1, 2, 3, 4, 5, 6]  # Up, Down, Left, Right, A, B, Start
-    goal_encoding:
-      menu_target_scale: 8.0
-      cursor_row_scale: 8.0
-      cursor_col_scale: 8.0
-      depth_scale: 4.0
-      open_flag_value: 1.0
-      reward_weights:
-        correct_target: 1.0
-        cursor_on_target: 0.5
-        stale_penalty: -0.1
-        stale_threshold: 48
-        close_penalty: -0.1
-    goal_defaults:
-      menu_target: 0
-      cursor_row: 0
-      cursor_col: 0
-      menu_depth: 0
+debug: True

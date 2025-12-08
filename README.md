@@ -4,7 +4,8 @@ A hierarchical RL stack for Pokemon Red built on PyBoy. A shared vision encoder 
 
 ## What the AI Looks Like
 - **Director (`src/agent/director.py`)**: Chooses a goal (explore, train, survive, menu) and biases routing to the right specialist. Maintains a lightweight graph for novelty and basic goal bookkeeping.
-- **Navigation Brain (`src/agent/specialists/nav_brain.py`)**: CrossQ-style DQN head for overworld movement. Episodes auto-end if a battle starts to keep nav clean.
+- **Navigation Brain (`src/agent/specialists/agent.py`)**: CrossQ-style DQN head for overworld movement. Episodes auto-end if a battle starts to keep nav clean. Map connection data from RAM is exposed to rewards to encourage purposeful exploration.
+- Warp-aware: map header connection data and warp tiles are exposed in `info` and navigation rewards bonus hitting warp tiles to enter/exit buildings.
 - **Battle Brain (`src/agent/specialists/battle_brain.py`)**: Distributional (Rainbow-like) head with NoisyLinear exploration for fights.
 - **Menu Brain (`src/agent/specialists/menu_brain.py`)**: Goal-conditioned DQN that learns to open/start menus and move the cursor to targets (bag, party, PC, or START).
 - **Environment (`src/env/pokemon_red_gym.py`)**: Gymnasium wrapper around PyBoy; pulls only rewards/signals from RAM; supports multiple starting states per phase and handles user window close gracefully.
@@ -21,6 +22,7 @@ A hierarchical RL stack for Pokemon Red built on PyBoy. A shared vision encoder 
 - `main.py` is only a placeholder docstring; there is no CLI wired there today.
 - `config/walkthrough.json` is provided for future walkthrough-aware goals but is not currently consumed anywhere.
 - `config/ModelFile.txt` defines the prompt for a local LLM (e.g., Ollama) used by `PokemonGoalLLM`; keep it in sync with your local model even though the code does not read it directly.
+- Battle/Menu specialists remain in the tree, but the current focus is letting the navigation agent run the game end-to-end.
 
 ## Repository Layout
 - `config/hyperparameters.yaml`: Central training and env settings (state paths, replay sizes, reward weights).

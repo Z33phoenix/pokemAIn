@@ -16,7 +16,7 @@ class PokemonRedGym(gym.Env):
     """
     Minimal Gymnasium wrapper around PyBoy configured purely via YAML.
 
-    Observations are 84x84 grayscale frames, actions are discrete button presses,
+    Observations are 96x96 grayscale frames, actions are discrete button presses,
     and info dictionaries expose a handful of RAM-derived signals for the
     Director and reward functions.
     """
@@ -32,6 +32,19 @@ class PokemonRedGym(gym.Env):
             window=window_backend,
             sound_volume=0,
         )
+        # Stash ROM path/bytes for warp parsing fallbacks.
+        self.rom_path = config.get("rom_path", "pokemon_red.gb")
+        try:
+            with open(self.rom_path, "rb") as f:
+                self.rom_bytes = f.read()
+            # Attach for downstream consumers that expect these attributes.
+            try:
+                setattr(self.pyboy, "_rom_bytes", self.rom_bytes)
+                setattr(self.pyboy, "rom_path", self.rom_path)
+            except Exception:
+                pass
+        except Exception:
+            self.rom_bytes = None
         self.pyboy.set_emulation_speed(config.get("emulation_speed", 1))
 
         self.action_repeat = int(config.get("action_repeat", 24))
@@ -59,7 +72,7 @@ class PokemonRedGym(gym.Env):
         ]
         self.action_space = spaces.Discrete(len(self.valid_actions))
         self.observation_space = spaces.Box(
-            low=0, high=255, shape=(1, 84, 84), dtype=np.uint8
+            low=0, high=255, shape=(1, 96, 96), dtype=np.uint8
         )
         self.memory = self.pyboy.memory
         self.state_buffers: List[Tuple[str, io.BytesIO]] = []
@@ -70,6 +83,7 @@ class PokemonRedGym(gym.Env):
         requested_path = config.get("state_path", default_state)
         fallback_paths = [requested_path, default_state, "initial.state"]
         candidate_states = self._collect_state_files(fallback_paths)
+        self._prev_map_id: int | None = None
 
         if candidate_states:
             self.state_buffers = self._load_state_buffers(candidate_states)
@@ -96,6 +110,7 @@ class PokemonRedGym(gym.Env):
             self.pyboy.load_state(reset_buffer)
         obs = self._get_obs()
         info = self._get_info()
+        self._prev_map_id = info.get("map_id")
         return obs, info
 
     def step(self, action: int):
@@ -116,17 +131,34 @@ class PokemonRedGym(gym.Env):
         self.step_count += 1
         obs = self._get_obs()
         info = self._get_info()
+        current_map = info.get("map_id")
+        if current_map is not None and current_map != self._prev_map_id:
+            #print(f"[DEBUG][MAP] Map changed {self._prev_map_id} -> {current_map} | warps: {info.get('map_warps')}")
+            self._prev_map_id = current_map
 
         terminated = False
         truncated = self.step_count >= self.max_steps
         reward = 0.0
         return obs, reward, terminated, truncated, info
 
+    def save_state(self, path: str):
+        """Persist current emulator state to the given path."""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            self.pyboy.save_state(f)
+
+    def load_state(self, path: str):
+        """Load emulator state from a given path."""
+        with open(path, "rb") as f:
+            self.pyboy.load_state(f)
+        self.step_count = 0
+        self._prev_map_id = ram_map.read_map_id(self.memory)
+
     def _get_obs(self):
-        """Capture the current 84x84 grayscale observation from PyBoy."""
+        """Capture the current 96x96 grayscale observation from PyBoy."""
         raw_screen = self.pyboy.screen.image
         gray = raw_screen.convert("L")
-        resized = gray.resize((84, 84))
+        resized = gray.resize((96, 96))
         return np.array(resized, dtype=np.uint8)[None, ...]
 
     def _compute_party_power(self) -> float:
@@ -158,6 +190,12 @@ class PokemonRedGym(gym.Env):
             "blaine": ram_map.read_flag_blaine(self.memory),
             "giovanni": ram_map.read_flag_giovanni(self.memory),
         }
+        map_width = ram_map.read_map_width(self.memory)
+        map_height = ram_map.read_map_height(self.memory)
+        map_connection_flags = ram_map.read_map_connection_flags(self.memory)
+        map_connections = ram_map.read_map_connections(self.memory)
+        current_map_id = ram_map.read_map_id(self.memory)
+        map_warps = ram_map.read_map_warps(self.pyboy, current_map_id, rom_bytes=self.rom_bytes)
         quest_flags = {
             "town_map": ram_map.read_flag_town_map(self.memory),
             "oak_parcel": ram_map.read_flag_oak_parcel(self.memory),
@@ -168,7 +206,12 @@ class PokemonRedGym(gym.Env):
             "mewtwo": ram_map.read_flag_mewtwo(self.memory),
         }
         return {
-            "map_id": ram_map.read_map_id(self.memory),
+            "map_id": current_map_id,
+            "map_width": map_width,
+            "map_height": map_height,
+            "map_connection_flags": map_connection_flags,
+            "map_connections": map_connections,
+            "map_warps": map_warps,
             "x": pos_x,
             "y": pos_y,
             "battle_active": ram_map.is_battle_active(self.memory),

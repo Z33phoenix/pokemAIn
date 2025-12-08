@@ -1,5 +1,5 @@
 """
-Legacy viewer for quickly rendering the agent's 84x84 observations.
+Legacy viewer for quickly rendering the agent's 96x96 observations.
 
 This is not part of the training flow and exists only as a simple manual
 visualization stub. The environment now requires a config dictionary; if you
@@ -15,7 +15,7 @@ from src.env.pokemon_red_gym import PokemonRedGym
 
 
 def main() -> None:
-    """Run a random-policy viewer that displays the agent's 84x84 observation."""
+    """Run a random-policy viewer that displays the agent's 96x96 observation."""
     # Minimal config so the env boots in windowed mode. Adjust paths as needed.
     env = PokemonRedGym({"headless": False, "emulation_speed": 1, "rom_path": "pokemon_red.gb"})
 

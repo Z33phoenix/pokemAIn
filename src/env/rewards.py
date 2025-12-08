@@ -12,7 +12,10 @@ class RewardSystem:
         self.config = config
         self.visited_maps: set[int] = set()
         self.seen_coords: set[Tuple[int, int, int]] = set()
+        self.visited_warps: set[Tuple[int, int, int]] = set()
+        self.warp_seen_positions: dict[int, set[Tuple[int, int]]] = {}
         self.last_coord: Tuple[int, int, int] = (0, 0, 0)
+        self.last_map_id: Optional[int] = None
         self.steps_stagnant = 0
         self.max_party_size = 0
         self.last_xp = 0
@@ -23,12 +26,17 @@ class RewardSystem:
         self.last_menu_target: Optional[int] = None
         self.menu_steps_stagnant = 0
         self.last_menu_open = False
+        self.map_graph: dict[int, set[int]] = {}
+        self.discovered_edges: set[frozenset[int]] = set()
 
     def reset(self):
         """Clear all per-episode tracking variables."""
         self.visited_maps.clear()
         self.seen_coords.clear()
+        self.visited_warps.clear()
+        self.warp_seen_positions.clear()
         self.last_coord = (0, 0, 0)
+        self.last_map_id = None
         self.steps_stagnant = 0
         self.max_party_size = 0
         self.last_xp = 0
@@ -39,6 +47,7 @@ class RewardSystem:
         self.last_menu_target = None
         self.menu_steps_stagnant = 0
         self.last_menu_open = False
+        self._reset_graph()
 
     def compute_components(
         self,
@@ -65,12 +74,27 @@ class RewardSystem:
         x, y = info.get("x", 0), info.get("y", 0)
         coord = (map_id, x, y)
         prev_coord = self.last_coord
+        prev_map_id = self.last_map_id
         prev_hp_fraction = self.last_hp_fraction
         was_in_battle_prev = self.was_in_battle
+        map_width = info.get("map_width")
+        map_height = info.get("map_height")
+        map_connections = info.get("map_connections") or {}
+        connection_count = sum(1 for data in map_connections.values() if data.get("exists"))
+        # Track warp positions seen per map for shaping toward transitions.
+        map_warps = info.get("map_warps") or []
+        if map_warps:
+            warp_pos = self.warp_seen_positions.setdefault(map_id, set())
+            for warp in map_warps:
+                wx, wy = warp.get("x"), warp.get("y")
+                if wx is not None and wy is not None:
+                    warp_pos.add((int(wx), int(wy)))
 
         if map_id not in self.visited_maps:
             self.visited_maps.add(map_id)
             rewards["nav_reward"] += cfg.get("new_map", 0.0)
+            if connection_count:
+                rewards["nav_reward"] += cfg.get("nav_connection_discovery", 0.0) * float(connection_count)
 
         if coord not in self.seen_coords:
             self.seen_coords.add(coord)
@@ -85,6 +109,55 @@ class RewardSystem:
         else:
             self.steps_stagnant = 0
             self.last_coord = coord
+
+        if map_width and map_height and connection_count:
+            # Reward reaching map edges that have connections defined to encourage transitions.
+            edge_reward = cfg.get("nav_connection_edge", 0.0)
+            if edge_reward != 0.0:
+                if map_connections.get("north", {}).get("exists") and y == 0:
+                    dest_map = map_connections.get("north", {}).get("dest_map")
+                    if dest_map is not None and not self._edge_exists(map_id, dest_map):
+                        rewards["nav_reward"] += edge_reward
+                if map_connections.get("south", {}).get("exists") and y == (map_height - 1):
+                    dest_map = map_connections.get("south", {}).get("dest_map")
+                    if dest_map is not None and not self._edge_exists(map_id, dest_map):
+                        rewards["nav_reward"] += edge_reward
+                if map_connections.get("west", {}).get("exists") and x == 0:
+                    dest_map = map_connections.get("west", {}).get("dest_map")
+                    if dest_map is not None and not self._edge_exists(map_id, dest_map):
+                        rewards["nav_reward"] += edge_reward
+                if map_connections.get("east", {}).get("exists") and x == (map_width - 1):
+                    dest_map = map_connections.get("east", {}).get("dest_map")
+                    if dest_map is not None and not self._edge_exists(map_id, dest_map):
+                        rewards["nav_reward"] += edge_reward
+        # Reward reaching warp tiles to encourage entering/exiting buildings.
+        warp_bonus = cfg.get("nav_warp", 0.0)
+        warp_proximity = cfg.get("nav_warp_proximity", 0.0)
+        if map_warps:
+            for warp in map_warps:
+                wx, wy = warp.get("x"), warp.get("y")
+                dest_map = warp.get("dest_map")
+                edge_known = self._edge_exists(map_id, dest_map)
+                if wx is None or wy is None:
+                    continue
+                if x == wx and y == wy:
+                    key = (map_id, wx, wy)
+                    if not edge_known and dest_map is not None and key not in self.visited_warps:
+                        rewards["nav_reward"] += warp_bonus
+                        self.visited_warps.add(key)
+                else:
+                    # Small shaping toward warps that lead to unexplored maps.
+                    dist = abs(int(wx) - int(x)) + abs(int(wy) - int(y))
+                    if warp_proximity and dist > 0 and not edge_known and dest_map is not None:
+                        rewards["nav_reward"] += warp_proximity / float(dist)
+
+        # Track traversed map-to-map edges (warps and boundaries are treated the same).
+        if prev_map_id is None:
+            self.last_map_id = map_id
+        elif map_id != prev_map_id:
+            if self._register_edge(prev_map_id, map_id):
+                rewards["nav_reward"] += cfg.get("nav_new_connection", 0.0)
+            self.last_map_id = map_id
 
         # Directional shaping: reward alignment with an explicit goal vector if provided.
         if goal_ctx:
@@ -303,6 +376,33 @@ class RewardSystem:
             if desired_cursor is not None and cursor is not None and tuple(cursor) == tuple(desired_cursor):
                 bonus += menu_cfg.get("cursor_match", 0.0)
         return float(bonus)
+
+    def _reset_graph(self):
+        """Clear the tracked overworld graph of maps and their traversed edges."""
+        self.map_graph.clear()
+        self.discovered_edges.clear()
+
+    def _edge_exists(self, map_a: Optional[int], map_b: Optional[int]) -> bool:
+        """Check if an undirected edge between two maps has already been discovered."""
+        if map_a is None or map_b is None:
+            return False
+        edge = frozenset((int(map_a), int(map_b)))
+        return edge in self.discovered_edges
+
+    def _register_edge(self, map_a: Optional[int], map_b: Optional[int]) -> bool:
+        """
+        Record an undirected edge between map_a and map_b. Returns True if the edge
+        was newly discovered (not previously present in the graph).
+        """
+        if map_a is None or map_b is None or map_a == map_b:
+            return False
+        edge = frozenset((int(map_a), int(map_b)))
+        if edge in self.discovered_edges:
+            return False
+        self.discovered_edges.add(edge)
+        self.map_graph.setdefault(int(map_a), set()).add(int(map_b))
+        self.map_graph.setdefault(int(map_b), set()).add(int(map_a))
+        return True
 
     @staticmethod
     def _menu_active(info: Dict[str, Any]) -> bool:
