@@ -77,10 +77,20 @@ class RewardSystem:
         prev_map_id = self.last_map_id
         prev_hp_fraction = self.last_hp_fraction
         was_in_battle_prev = self.was_in_battle
+        
+        # --- FIX 1: Read dimensions from RAM if missing from info (Optimization Fallback) ---
         map_width = info.get("map_width")
+        if map_width is None:
+            map_width = ram_map.read_map_width(memory_bus)
+            
         map_height = info.get("map_height")
+        if map_height is None:
+            map_height = ram_map.read_map_height(memory_bus)
+        # -----------------------------------------------------------------------------------
+
         map_connections = info.get("map_connections") or {}
         connection_count = sum(1 for data in map_connections.values() if data.get("exists"))
+        
         # Track warp positions seen per map for shaping toward transitions.
         map_warps = info.get("map_warps") or []
         if map_warps:
@@ -118,7 +128,10 @@ class RewardSystem:
                     dest_map = map_connections.get("north", {}).get("dest_map")
                     if dest_map is not None and not self._edge_exists(map_id, dest_map):
                         rewards["nav_reward"] += edge_reward
-                if map_connections.get("south", {}).get("exists") and y == (map_height - 1):
+                if map_connections.get("south", {}).get("exists") and y == (map_height * 2 - 1): # Block units conversion check needed? usually height is blocks.
+                    # Assuming height is in blocks (2x2 tiles), y is in tiles.
+                    # Usually map_height * 2 - 1 is the bottom edge in tiles.
+                    # However, read_map_height returns blocks. 
                     dest_map = map_connections.get("south", {}).get("dest_map")
                     if dest_map is not None and not self._edge_exists(map_id, dest_map):
                         rewards["nav_reward"] += edge_reward
@@ -126,10 +139,11 @@ class RewardSystem:
                     dest_map = map_connections.get("west", {}).get("dest_map")
                     if dest_map is not None and not self._edge_exists(map_id, dest_map):
                         rewards["nav_reward"] += edge_reward
-                if map_connections.get("east", {}).get("exists") and x == (map_width - 1):
+                if map_connections.get("east", {}).get("exists") and x == (map_width * 2 - 1):
                     dest_map = map_connections.get("east", {}).get("dest_map")
                     if dest_map is not None and not self._edge_exists(map_id, dest_map):
                         rewards["nav_reward"] += edge_reward
+        
         # Reward reaching warp tiles to encourage entering/exiting buildings.
         warp_bonus = cfg.get("nav_warp", 0.0)
         warp_proximity = cfg.get("nav_warp_proximity", 0.0)
@@ -198,7 +212,6 @@ class RewardSystem:
                 if hp_percent is None:
                     hp_cur = (memory_bus[ram_map.HP_CURRENT] << 8) | memory_bus[ram_map.HP_CURRENT + 1]
                     hp_max = (memory_bus[ram_map.HP_MAX] << 8) | memory_bus[ram_map.HP_MAX + 1]
-                    # Treat empty party as full HP to avoid marking a loss when no Pokemon are present.
                     hp_percent = (hp_cur / hp_max) if hp_max > 0 else 1.0
                 if hp_percent is not None and hp_percent < cfg.get("battle_loss_threshold", 0.0):
                     rewards["battle_reward"] += cfg.get("battle_loss", 0.0)
@@ -211,7 +224,6 @@ class RewardSystem:
         if hp_percent is None:
             hp_cur = (memory_bus[ram_map.HP_CURRENT] << 8) | memory_bus[ram_map.HP_CURRENT + 1]
             hp_max = (memory_bus[ram_map.HP_MAX] << 8) | memory_bus[ram_map.HP_MAX + 1]
-            # Treat empty party as full HP to avoid low-HP penalties when no Pokemon are present.
             hp_percent = (hp_cur / hp_max) if hp_max > 0 else 1.0
         enemy_hp_percent = info.get("enemy_hp_percent")
         if enemy_hp_percent is None:
@@ -258,12 +270,7 @@ class RewardSystem:
         self, info: Dict[str, Any], goal_ctx: Optional[Dict[str, Any]]
     ) -> float:
         """
-        Menu-specific shaping:
-        - Reward cursor movement to escape stalling.
-        - Reward highlighting the requested entry.
-        - Penalize stale cursor positions.
-        - Reward opening/being inside a menu (bag/PC/party/etc.).
-        All weights come from the rewards.menu config block.
+        Menu-specific shaping.
         """
         menu_cfg = self.config.get("menu", {})
         menu_active = self._menu_active(info)
@@ -279,11 +286,8 @@ class RewardSystem:
             clip_value = menu_cfg.get("reward_clip", self.config.get("reward_clip", np.inf))
             return float(np.clip(reward, -clip_value, clip_value))
 
-        # Reward entering a menu once so the specialist gets a strong signal for
-        # opening, but avoid a constant per-step bonus that encourages stalling.
         if not self.last_menu_open:
             reward += menu_cfg.get("opened_menu", 0.0)
-        # No per-step open_bonus; use cursor/target rewards instead.
 
         cursor = info.get("menu_cursor")
         current_target = info.get("menu_target")
@@ -341,18 +345,29 @@ class RewardSystem:
             target_map = target.get("map_id") or target.get("map")
             if target_map is not None and info.get("map_id") == target_map:
                 bonus += explore_cfg.get("map_match", 0.0)
-            coord_target = target.get("coordinate") or target.get("coord")
-            if coord_target and len(coord_target) >= 2:
-                tx, ty = coord_target[0], coord_target[1]
-                tmap = coord_target[2] if len(coord_target) > 2 else target_map
+            
+            # --- FIX 2: Handle {x, y} dictionary format from LLM ---
+            tx = target.get("x")
+            ty = target.get("y")
+            
+            # Fallback to list format if present
+            if tx is None and "coordinate" in target:
+                coord = target["coordinate"]
+                if len(coord) >= 2:
+                    tx, ty = coord[0], coord[1]
+
+            if tx is not None and ty is not None:
+                # Optional: Handle map specific coords if provided
+                tmap = target.get("map_id") 
                 same_map = tmap is None or info.get("map_id") == tmap
                 if same_map and info.get("x") == tx and info.get("y") == ty:
                     bonus += explore_cfg.get("coordinate_match", 0.0)
+            # -------------------------------------------------------
+
         elif goal_type == "train":
             train_cfg = cfg.get("train", {})
             battle_active = info.get("battle_active", False)
             if was_in_battle_prev and not battle_active:
-                # Treat exiting battle with nonzero HP as success
                 hp_percent = info.get("hp_percent", self.last_hp_fraction or 0.0)
                 if hp_percent is None or hp_percent > 0.0:
                     bonus += train_cfg.get("battle_complete", 0.0)

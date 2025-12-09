@@ -1,4 +1,4 @@
-import os
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -146,7 +146,33 @@ class LLMGoalCoordinator:
             "name": goal_json.get("name") or target_map_name or "llm-goal",
         }
 
+class EpisodicMemory:
+    """Tracks the agent's recent history for LLM context."""
+    
+    def __init__(self):
+        self.events = []
 
+    def log_event(self, step: int, event_type: str, detail: str):
+        """Log a significant event (Map change, Battle, Item)."""
+        entry = f"[{step}] {event_type}: {detail}"
+        # Avoid duplicate consecutive logs (e.g., spamming 'A' on a sign)
+        if self.events and self.events[-1] == entry:
+            return
+        self.events.append(entry)
+
+    def consume_history(self) -> str:
+        """
+        Returns the log of events since the last call, ordered MOST RECENT -> OLDEST.
+        Clears the buffer after reading.
+        """
+        if not self.events:
+            return "No recent events."
+        
+        # Reverse to show newest first, as requested
+        history_str = "\n".join(reversed(self.events))
+        self.events.clear() # Flush the buffer
+        return history_str
+    
 class Director:
     """Lightweight, non-neural coordinator that always routes to the navigation brain."""
 

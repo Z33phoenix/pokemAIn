@@ -75,8 +75,6 @@ goal_llm:
   api_url: http://localhost:11434/api/chat
   model: pokemon-goal
   timeout: 50.0
-  retry_interval: 32  # steps between retries when no active/queued goal
-  walkthrough_path: config/walkthrough.json  # Provided for future walkthrough-aware goals; currently unused
   debug: True
 router_pretrain_path: checkpoints/director_router_pretrained.pth
 

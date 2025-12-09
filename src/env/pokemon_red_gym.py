@@ -169,70 +169,47 @@ class PokemonRedGym(gym.Env):
 
     def _get_info(self) -> Dict[str, Any]:
         """Read relevant RAM offsets into a structured info dict."""
+        # 1. Battle & Health Stats (Needed for Rewards)
         hp_current, hp_max = ram_map.read_player_hp(self.memory)
         enemy_hp_current, enemy_hp_max = ram_map.read_enemy_hp(self.memory)
-        pos_x, pos_y = ram_map.read_player_position(self.memory)
-        menu_last_index = ram_map.read_last_menu_item(self.memory)
-        menu_has_options = menu_last_index > 0
-        menu_open_flag = ram_map.is_menu_open(self.memory)
-        menu_open = bool(menu_open_flag)
-        menu_cursor = ram_map.read_menu_cursor(self.memory)
-        menu_target = ram_map.read_menu_target(self.memory)
-        menu_depth = ram_map.read_menu_depth(self.memory)
-        badge_flags = ram_map.read_badge_flags(self.memory)
-        badges = {
-            "brock": ram_map.read_flag_brock(self.memory),
-            "misty": ram_map.read_flag_misty(self.memory),
-            "lt_surge": ram_map.read_flag_lt_surge(self.memory),
-            "erika": ram_map.read_flag_erika(self.memory),
-            "koga": ram_map.read_flag_koga(self.memory),
-            "sabrina": ram_map.read_flag_sabrina(self.memory),
-            "blaine": ram_map.read_flag_blaine(self.memory),
-            "giovanni": ram_map.read_flag_giovanni(self.memory),
-        }
-        map_width = ram_map.read_map_width(self.memory)
-        map_height = ram_map.read_map_height(self.memory)
-        map_connection_flags = ram_map.read_map_connection_flags(self.memory)
-        map_connections = ram_map.read_map_connections(self.memory)
+        battle_active = ram_map.is_battle_active(self.memory)
+        
+        # 2. Navigation "Senses" (Needed for LLM & Director)
         current_map_id = ram_map.read_map_id(self.memory)
-        map_warps = ram_map.read_map_warps(self.pyboy, current_map_id, rom_bytes=self.rom_bytes)
-        quest_flags = {
-            "town_map": ram_map.read_flag_town_map(self.memory),
-            "oak_parcel": ram_map.read_flag_oak_parcel(self.memory),
-            "lapras": ram_map.read_flag_lapras(self.memory),
-            "snorlax_vermilion": ram_map.read_flag_snorlax_vermilion(self.memory),
-            "snorlax_celadon": ram_map.read_flag_snorlax_celadon(self.memory),
-            "ss_anne": ram_map.read_flag_ss_anne(self.memory),
-            "mewtwo": ram_map.read_flag_mewtwo(self.memory),
-        }
+        pos_x, pos_y = ram_map.read_player_position(self.memory)
+        
+        # Optimization: Only read heavy map data if exploring
+        if not battle_active:
+            map_connections = ram_map.read_map_connections(self.memory)
+            # Pass rom_bytes for warp parsing
+            map_warps = ram_map.read_map_warps(self.pyboy, current_map_id, rom_bytes=self.rom_bytes)
+            # This now returns enriched data (type: TRAINER/ITEM/NPC)
+            sprites = ram_map.read_sprites(self.memory)
+        else:
+            map_connections, map_warps, sprites = {}, [], []
+
         return {
+            # --- State for LLM & Director ---
             "map_id": current_map_id,
-            "map_width": map_width,
-            "map_height": map_height,
-            "map_connection_flags": map_connection_flags,
-            "map_connections": map_connections,
-            "map_warps": map_warps,
             "x": pos_x,
             "y": pos_y,
-            "battle_active": ram_map.is_battle_active(self.memory),
+            "badges": ram_map.read_badge_count(self.memory), # Int
             "party_size": ram_map.read_party_size(self.memory),
-            # Treat empty party as full HP to avoid spurious low-HP penalties.
-            "hp_percent": (hp_current / hp_max) if hp_max > 0 else 1.0,
+            "map_connections": map_connections,
+            "map_warps": map_warps,
+            "sprites": sprites,
+            
+            # --- State for Reward System ---
+            "battle_active": battle_active,
+            "menu_open": ram_map.is_menu_open(self.memory),
             "hp_current": hp_current,
             "hp_max": hp_max,
-            "enemy_hp_percent": (enemy_hp_current / enemy_hp_max) if enemy_hp_max > 0 else 0.0,
+            "hp_percent": (hp_current / hp_max) if hp_max > 0 else 1.0,
             "enemy_hp_current": enemy_hp_current,
             "enemy_hp_max": enemy_hp_max,
-            "menu_open": menu_open,
-            "menu_cursor": menu_cursor,
-            "menu_target": menu_target,
-            "menu_depth": menu_depth,
-            "menu_has_options": menu_has_options,
-            "menu_last_index": menu_last_index,
-            "badge_count": ram_map.read_badge_count(self.memory),
-            "badges": badges,
-            "quest_flags": quest_flags,
-            "party_power": self._compute_party_power(),
+            "enemy_hp_percent": (enemy_hp_current / enemy_hp_max) if enemy_hp_max > 0 else 0.0,
+            # Simple Party Power heuristic
+            "party_power": (hp_current / hp_max) if hp_max > 0 else 0.0,
         }
 
     def close(self):
