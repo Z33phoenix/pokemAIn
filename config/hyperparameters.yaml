@@ -12,7 +12,7 @@ game: pokemon_red
 # Environment
 # =============================================================================
 environment:
-  rom_path: src/games/gb/pokemon_red.gb  # Will be auto-detected as pokemon_red from .gb extension
+  rom_path: src/games/gb/pokemon_red_color.gb  # Will be auto-detected as pokemon_red from .gb extension
   state_path: states/initial.state
   headless: false
   emulation_speed: 5

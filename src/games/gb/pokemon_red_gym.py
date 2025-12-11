@@ -104,6 +104,7 @@ class PokemonRedGym(GameEnvironment):
             config.get("rom_path", "pokemon_red.gb"),
             window=window_backend,
             sound_volume=0,
+            cgb=True,
         )
         # Stash ROM path/bytes for warp parsing fallbacks.
         self.rom_path = config.get("rom_path", "pokemon_red.gb")
