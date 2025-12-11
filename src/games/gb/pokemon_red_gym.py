@@ -10,6 +10,7 @@ import pyboy
 from pyboy.utils import WindowEvent
 
 from src.core.game_interface import GameEnvironment, MemoryInterface, GameDataProvider
+from src.core.visual_processor import UnifiedVisualProcessor, create_unified_observation_space
 from src.games.gb import ram_map
 from src.games.gb.game_data import PokemonRedData
 
@@ -145,9 +146,7 @@ class PokemonRedGym(GameEnvironment):
             WindowEvent.RELEASE_BUTTON_SELECT,
         ]
         self.action_space = spaces.Discrete(len(self.valid_actions))
-        self.observation_space = spaces.Box(
-            low=0, high=255, shape=(1, 96, 96), dtype=np.uint8
-        )
+        self.observation_space = create_unified_observation_space()
         self.memory = self.pyboy.memory
 
         # Create abstracted interfaces for hot-swapping
@@ -234,11 +233,9 @@ class PokemonRedGym(GameEnvironment):
         self._prev_map_id = ram_map.read_map_id(self.memory)
 
     def _get_obs(self):
-        """Capture the current 96x96 grayscale observation from PyBoy."""
+        """Capture the current unified canvas observation (160, 240, 1) from PyBoy."""
         raw_screen = self.pyboy.screen.image
-        gray = raw_screen.convert("L")
-        resized = gray.resize((96, 96))
-        return np.array(resized, dtype=np.uint8)[None, ...]
+        return UnifiedVisualProcessor.process_gb_screen(raw_screen)
 
     def _compute_party_power(self) -> float:
         """Heuristic party strength proxy based on current HP fraction."""

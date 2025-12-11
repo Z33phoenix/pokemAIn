@@ -4,13 +4,16 @@ import numpy as np
 
 class NatureCNN(nn.Module):
     """
-    Standard DQN Feature Extractor (Mnih et al. 2015).
-    Input: (B, 1, 96, 96)
+    Standard DQN Feature Extractor (Mnih et al. 2015) - Unified Canvas Version.
+    Input: (B, 1, 160, 240) - Supports both GB (centered) and GBA (native) games
     Output: (B, 512) feature vector
     """
-    def __init__(self, input_channels=1, features_dim=512):
+    def __init__(self, input_channels=1, input_height=160, input_width=240, features_dim=512):
         """Initialize convolutional feature extractor and compute flatten size."""
         super().__init__()
+        
+        self.input_height = input_height
+        self.input_width = input_width
         
         self.cnn = nn.Sequential(
             # Layer 1: 8x8 kernel, stride 4
@@ -28,9 +31,9 @@ class NatureCNN(nn.Module):
             nn.Flatten()
         )
 
-        # Compute shape by passing a dummy tensor
+        # Compute shape by passing a dummy tensor with actual input dimensions
         with torch.no_grad():
-            dummy = torch.zeros(1, input_channels, 96, 96)
+            dummy = torch.zeros(1, input_channels, input_height, input_width)
             n_flatten = self.cnn(dummy).shape[1]
 
         self.linear = nn.Sequential(
@@ -39,7 +42,7 @@ class NatureCNN(nn.Module):
         )
 
     def forward(self, x):
-        """Return a 512-dim feature vector from a (B, 1, 96, 96) input tensor."""
+        """Return a 512-dim feature vector from a (B, 1, 160, 240) input tensor."""
         if x.max() > 1.0:
              x = x / 255.0
 
