@@ -97,17 +97,3 @@ class GraphMemory:
             to_remove.remove(self.current_node)
         if to_remove:
             self.graph.remove_nodes_from(to_remove)
-
-    def find_path_to_start(self, start_node_hash: bytes) -> Optional[list[int]]:
-        """Returns a sequence of actions that leads back to start_node_hash."""
-        try:
-            path = nx.shortest_path(
-                self.graph, source=self.current_node, target=start_node_hash
-            )
-            actions: list[int] = []
-            for i in range(len(path) - 1):
-                data = self.graph.get_edge_data(path[i], path[i + 1])
-                actions.append(data["action"])
-            return actions
-        except nx.NetworkXNoPath:
-            return None

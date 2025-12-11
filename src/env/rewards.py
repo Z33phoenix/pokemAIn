@@ -1,15 +1,28 @@
 import numpy as np
 from typing import Any, Dict, Optional, Tuple
 
-from src.env import ram_map
+from src.core.game_interface import MemoryInterface
 
 
 class RewardSystem:
-    """Reward shaping heuristics configured entirely via YAML."""
+    """
+    Reward shaping heuristics configured entirely via YAML.
 
-    def __init__(self, config: Dict[str, float]):
-        """Store config and initialize mutable reward-tracking state."""
+    Updated to use MemoryInterface abstraction for game-agnostic memory access.
+    This allows the reward system to work with any game (Red, Emerald, etc.)
+    without changes.
+    """
+
+    def __init__(self, config: Dict[str, float], memory_interface: Optional[MemoryInterface] = None):
+        """
+        Store config and initialize mutable reward-tracking state.
+
+        Args:
+            config: Reward configuration dictionary
+            memory_interface: Optional memory interface (can be set later via set_memory_interface)
+        """
         self.config = config
+        self._memory_interface = memory_interface
         self.visited_maps: set[int] = set()
         self.seen_coords: set[Tuple[int, int, int]] = set()
         self.visited_warps: set[Tuple[int, int, int]] = set()
@@ -28,6 +41,10 @@ class RewardSystem:
         self.last_menu_open = False
         self.map_graph: dict[int, set[int]] = {}
         self.discovered_edges: set[frozenset[int]] = set()
+
+    def set_memory_interface(self, memory_interface: MemoryInterface):
+        """Set the memory interface for this reward system."""
+        self._memory_interface = memory_interface
 
     def reset(self):
         """Clear all per-episode tracking variables."""
@@ -52,7 +69,6 @@ class RewardSystem:
     def compute_components(
         self,
         info: Dict[str, Any],
-        memory_bus,
         obs,
         action: int,
         goal_ctx: Optional[Dict[str, Any]] = None,
@@ -60,6 +76,12 @@ class RewardSystem:
         """
         Returns a dict of reward components keyed by specialist type plus a global term.
         The caller is responsible for combining/clipping as needed.
+
+        Args:
+            info: Game state information dictionary from environment
+            obs: Observation (screen pixels)
+            action: Action taken
+            goal_ctx: Optional goal context for goal-aware rewards
         """
         cfg = self.config
         rewards = {
@@ -77,16 +99,10 @@ class RewardSystem:
         prev_map_id = self.last_map_id
         prev_hp_fraction = self.last_hp_fraction
         was_in_battle_prev = self.was_in_battle
-        
-        # --- FIX 1: Read dimensions from RAM if missing from info (Optimization Fallback) ---
+
+        # Map dimensions (optional - used for edge rewards)
         map_width = info.get("map_width")
-        if map_width is None:
-            map_width = ram_map.read_map_width(memory_bus)
-            
         map_height = info.get("map_height")
-        if map_height is None:
-            map_height = ram_map.read_map_height(memory_bus)
-        # -----------------------------------------------------------------------------------
 
         map_connections = info.get("map_connections") or {}
         connection_count = sum(1 for data in map_connections.values() if data.get("exists"))
@@ -194,10 +210,13 @@ class RewardSystem:
             rewards["global_reward"] += cfg.get("catch_pokemon", 0.0) * (party_size - self.max_party_size)
             self.max_party_size = party_size
 
-        current_xp = ram_map.read_first_mon_exp(memory_bus)
-        if current_xp > self.last_xp > 0:
-            rewards["global_reward"] += cfg.get("level_up", 0.0)
-        self.last_xp = current_xp
+        # Experience tracking (use memory interface if available)
+        current_xp = 0
+        if self._memory_interface is not None:
+            current_xp = self._memory_interface.get_first_pokemon_experience()
+            if current_xp > self.last_xp > 0:
+                rewards["global_reward"] += cfg.get("level_up", 0.0)
+            self.last_xp = current_xp
 
         menu_active = self._menu_active(info)
         if menu_active and not self.last_menu_open:
@@ -208,27 +227,18 @@ class RewardSystem:
             rewards["battle_reward"] += cfg.get("battle_tick", 0.0)
         else:
             if self.was_in_battle:
-                hp_percent = info.get("hp_percent")
-                if hp_percent is None:
-                    hp_cur = (memory_bus[ram_map.HP_CURRENT] << 8) | memory_bus[ram_map.HP_CURRENT + 1]
-                    hp_max = (memory_bus[ram_map.HP_MAX] << 8) | memory_bus[ram_map.HP_MAX + 1]
-                    hp_percent = (hp_cur / hp_max) if hp_max > 0 else 1.0
-                if hp_percent is not None and hp_percent < cfg.get("battle_loss_threshold", 0.0):
+                # Battle just ended - check if we won or lost
+                hp_percent = info.get("hp_percent", 1.0)
+                if hp_percent < cfg.get("battle_loss_threshold", 0.0):
                     rewards["battle_reward"] += cfg.get("battle_loss", 0.0)
                 else:
                     rewards["battle_reward"] += cfg.get("battle_win", 0.0)
             self.last_enemy_hp_fraction = None
         self.was_in_battle = battle_active
 
-        hp_percent = info.get("hp_percent")
-        if hp_percent is None:
-            hp_cur = (memory_bus[ram_map.HP_CURRENT] << 8) | memory_bus[ram_map.HP_CURRENT + 1]
-            hp_max = (memory_bus[ram_map.HP_MAX] << 8) | memory_bus[ram_map.HP_MAX + 1]
-            hp_percent = (hp_cur / hp_max) if hp_max > 0 else 1.0
+        # Get HP percentages from info (provided by gym)
+        hp_percent = info.get("hp_percent", 1.0)
         enemy_hp_percent = info.get("enemy_hp_percent")
-        if enemy_hp_percent is None:
-            enemy_hp_cur, enemy_hp_max = ram_map.read_enemy_hp(memory_bus)
-            enemy_hp_percent = (enemy_hp_cur / enemy_hp_max) if enemy_hp_max > 0 else None
 
         if battle_active:
             if enemy_hp_percent is not None:
@@ -259,11 +269,19 @@ class RewardSystem:
             rewards[key] = float(np.clip(value, -clip_value, clip_value))
         return rewards
 
-    def compute_reward(self, info: Dict[str, Any], memory_bus, obs, action: int) -> float:
+    def compute_reward(self, info: Dict[str, Any], obs, action: int) -> float:
         """
         Backwards-compatible scalar reward. Prefer compute_components for new code.
+
+        Args:
+            info: Game state information dictionary
+            obs: Observation (screen pixels)
+            action: Action taken
+
+        Returns:
+            Total reward as a float
         """
-        rewards = self.compute_components(info, memory_bus, obs, action)
+        rewards = self.compute_components(info, obs, action)
         return float(sum(rewards.values()))
 
     def compute_menu_reward(

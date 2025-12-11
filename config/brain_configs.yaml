@@ -1,0 +1,141 @@
+# =============================================================================
+# RL Brain Configurations for Pokemon Agent
+# Optimized for GTX 1080 Ti (6GB VRAM) and 6-core CPU
+# =============================================================================
+
+# Memory Budget Presets
+# Use these to quickly switch between different memory configurations
+memory_presets:
+  # Ultra-low memory (if running other processes)
+  minimal:
+    buffer_capacity: 10000
+    batch_size: 16
+    image_resolution: 64  # Downscale to 64x64
+    feature_dim: 256
+
+  # Low memory (safe default for 6GB VRAM)
+  low:
+    buffer_capacity: 30000
+    batch_size: 32
+    image_resolution: 96  # 96x96 (current default)
+    feature_dim: 512
+
+  # Medium memory (if no other GPU tasks)
+  medium:
+    buffer_capacity: 50000
+    batch_size: 64
+    image_resolution: 96
+    feature_dim: 512
+
+  # High memory (experimental - may OOM)
+  high:
+    buffer_capacity: 100000
+    batch_size: 128
+    image_resolution: 96
+    feature_dim: 512
+
+# =============================================================================
+# CrossQ Brain Configuration
+# =============================================================================
+crossq:
+  # Architecture
+  use_encoder: true
+  feature_dim: 512  # NatureCNN output dimension
+  input_dim: 9216   # 96x96 pixels (if no encoder)
+  action_dim: 6     # 8 buttons on Game Boy, limited to no start/select
+
+  # Learning parameters
+  learning_rate: 0.0001
+  gamma: 0.99
+
+  # Exploration
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay: 100000  # Steps to decay over
+
+  # Experience replay
+  buffer_capacity: 50000  # Override with memory preset
+  batch_size: 32          # Override with memory preset
+  min_buffer_size: 1000   # Start training after this many samples
+
+  # Device
+  device: "cuda"  # "cuda" or "cpu"
+
+# =============================================================================
+# BBF (Bigger, Better, Faster) Brain Configuration
+# Placeholder for future implementation
+# =============================================================================
+bbf:
+  # Architecture
+  use_encoder: true
+  feature_dim: 512
+  action_dim: 8
+
+  # BBF-specific parameters
+  learning_rate: 0.0001
+  gamma: 0.99
+  ensemble_size: 5  # Number of Q-networks in ensemble
+
+  # Experience replay
+  buffer_capacity: 50000
+  batch_size: 32
+  min_buffer_size: 1000
+
+  device: "cuda"
+
+# =============================================================================
+# Rainbow DQN Brain Configuration
+# Placeholder for future implementation
+# =============================================================================
+rainbow:
+  # Architecture
+  use_encoder: true
+  feature_dim: 512
+  action_dim: 8
+
+  # Rainbow components
+  use_dueling: true
+  use_double_q: true
+  use_noisy_nets: true
+  use_prioritized_replay: true
+  use_n_step: true
+  n_step: 3
+
+  # Learning parameters
+  learning_rate: 0.0001
+  gamma: 0.99
+
+  # Prioritized replay
+  alpha: 0.6  # Priority exponent
+  beta_start: 0.4
+  beta_frames: 100000
+
+  # Experience replay
+  buffer_capacity: 50000
+  batch_size: 32
+  min_buffer_size: 1000
+
+  # Target network
+  target_update_freq: 1000
+
+  device: "cuda"
+
+# =============================================================================
+# Memory Optimization Tips
+# =============================================================================
+#
+# To reduce VRAM usage:
+# 1. Decrease buffer_capacity (stores experiences on CPU, but still impacts GPU during sampling)
+# 2. Decrease batch_size (fewer samples processed per training step)
+# 3. Decrease image_resolution (requires changing environment output)
+# 4. Decrease feature_dim (smaller CNN encoder output)
+# 5. Set device: "cpu" for the brain (much slower training)
+#
+# To increase sample efficiency:
+# 1. Increase buffer_capacity (more diverse experiences)
+# 2. Increase batch_size (more stable gradients)
+# 3. Tune epsilon_decay (longer exploration phase)
+# 4. Use Rainbow DQN (multiple enhancements)
+#
+# Current settings use ~3-4GB VRAM with CrossQ, leaving room for other processes.
+# =============================================================================

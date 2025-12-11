@@ -1,8 +1,18 @@
 # =============================================================================
+# Game Selection (Hot-Swappable Architecture)
+# =============================================================================
+# Supported games:
+#   pokemon_red - Pokemon Red/Blue (Game Boy, PyBoy emulator)
+#   pokemon_emerald - Pokemon Emerald (GBA, mGBA emulator) [TODO: Not yet implemented]
+#
+# The game will be auto-detected from ROM file extension if not specified.
+game: pokemon_red
+
+# =============================================================================
 # Environment
 # =============================================================================
 environment:
-  rom_path: pokemon_red.gb
+  rom_path: src/games/gb/pokemon_red.gb  # Will be auto-detected as pokemon_red from .gb extension
   state_path: states/initial.state
   headless: false
   emulation_speed: 5
@@ -71,12 +81,31 @@ agent:
   allowed_actions: [0, 1, 2, 3, 4, 5]  # Arrows, A, B
 
 goal_llm:
-  enabled: True
+  enabled: False
   api_url: http://localhost:11434/api/chat
   model: pokemon-goal
   timeout: 50.0
-  debug: True
+  debug: False
+
+# =============================================================================
+# Strategy Configuration (NEW - Pluggable Architecture)
+# =============================================================================
+# These control goal-setting and reward calculation strategies
+# Leave commented to use auto-detection based on goal_llm.enabled
+# Uncomment to override manually
+
+# goal_strategy: "llm"        # Options: "llm", "heuristic", "none"
+# reward_strategy: "goal_aware"  # Options: "goal_aware", "base", "hybrid"
+
+# Strategy Presets (use with train_refactored.py --strategy <preset>):
+#   llm:       Full LLM-based goal-setting with completion rewards
+#   heuristic: Hand-crafted heuristic goals with completion rewards
+#   reactive:  Pure reactive RL - no goals, no goal rewards (fixes bug!)
+#   hybrid:    Heuristic goals with directional shaping only
+
 router_pretrain_path: checkpoints/director_router_pretrained.pth
+
+saves_dir: saves
 
 # =============================================================================
 # Debug

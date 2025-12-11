@@ -1,8 +1,16 @@
 """
-Game data helpers for translating numeric identifiers into human-readable names.
+Pokemon Red game data provider.
+
+Implements GameDataProvider interface with Pokemon Red-specific lookups:
+- Map ID to name mappings (Pallet Town, Viridian City, etc.)
+- Pokemon ID to name mappings (Gen 1 internal order)
+- Item ID to name mappings (including TMs/HMs)
+
+This is game-specific data that will differ for other games (Emerald, etc.)
 """
 
-from typing import Optional
+from typing import Optional, List
+from src.core.game_interface import GameDataProvider
 
 # Map ID -> Name derived from the ROM header list (valid locations only).
 MAP_ID_TO_NAME = {
@@ -585,3 +593,66 @@ def item_name_to_id(name: Optional[str]) -> Optional[int]:
     if not name:
         return None
     return ITEM_NAME_TO_ID.get(name.strip().lower())
+
+
+# ============================================================================
+# GameDataProvider Implementation for Pokemon Red
+# ============================================================================
+
+class PokemonRedData(GameDataProvider):
+    """
+    Pokemon Red game data provider implementation.
+
+    Provides all game-specific data lookups for Pokemon Red (Game Boy).
+    This allows the training code to access Red-specific data through
+    a clean interface that can be swapped for other games.
+    """
+
+    def map_id_to_name(self, map_id: int) -> str:
+        """Convert map ID to human-readable name."""
+        return map_id_to_name(map_id)
+
+    def pokemon_id_to_name(self, pokemon_id: int) -> str:
+        """Convert Pokemon ID to name."""
+        return pokemon_id_to_name(pokemon_id)
+
+    def item_id_to_name(self, item_id: int) -> str:
+        """Convert item ID to name."""
+        return item_id_to_name(item_id)
+
+    def get_all_map_ids(self) -> List[int]:
+        """Get list of all valid map IDs."""
+        return list(MAP_ID_TO_NAME.keys())
+
+    def location_exists(self, map_id: int) -> bool:
+        """Check if a map ID is valid."""
+        return map_id in MAP_ID_TO_NAME
+
+    def get_game_name(self) -> str:
+        """Get the game name."""
+        return "Pokemon Red"
+
+    def get_total_badges(self) -> int:
+        """Get total number of badges in Pokemon Red (8 gym badges)."""
+        return 8
+
+    # Additional helper methods for Pokemon Red specifics
+    def get_all_pokemon_ids(self) -> List[int]:
+        """Get list of all Pokemon IDs in Gen 1."""
+        return list(POKEMON_ID_TO_NAME.keys())
+
+    def get_all_item_ids(self) -> List[int]:
+        """Get list of all item IDs."""
+        return list(ITEM_ID_TO_NAME.keys())
+
+    def pokemon_name_to_id(self, name: str) -> Optional[int]:
+        """Convert Pokemon name to ID (case-insensitive)."""
+        return pokemon_name_to_id(name)
+
+    def map_name_to_id(self, name: str) -> Optional[int]:
+        """Convert map name to ID (case-insensitive)."""
+        return map_name_to_id(name)
+
+    def item_name_to_id(self, name: str) -> Optional[int]:
+        """Convert item name to ID (case-insensitive)."""
+        return item_name_to_id(name)

@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 import urllib.error
 import urllib.request
 
-from src.utils.game_data import map_id_to_name
+from src.env.game_data import map_id_to_name
 
 
 class PokemonGoalLLM:

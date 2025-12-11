@@ -18,8 +18,11 @@ venv/
 *.ram
 *.state
 *.pth
-experiments/logs/
+experiments/
 states/
+summaries/
+tests/
+.claude/
 
 # File Ignores
 extract_maps.py

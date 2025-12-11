@@ -20,10 +20,10 @@ The system provides a list of actionable objects in the format: "Type at (x,y)".
 
 ### 3. GOAL TYPES
 - "NAVIGATE": Move to a specific Map Name OR a specific (x,y) Coordinate.
-- "INTERACT": Talk to an NPC or read a Sign.
-- "BATTLE": A specific static encounter (e.g., "Brock").
-- "MENU": Use an Item/HM.
-- "SEARCH": Random exploration.
+- "INTERACT": Talk to an NPC, read a Sign, or use an Item/HM.
+- "EXPLORE": Target an "unexplored" neighbor or "UNKNOWN" warp.
+- "SURVIVE": Heal or backtrack to a safe area.
+- "GRIND": Fight wild pokemon in the current area.
 
 ### 4. OUTPUT FORMAT
 You must respond with a SINGLE JSON OBJECT.
