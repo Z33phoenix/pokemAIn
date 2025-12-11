@@ -9,7 +9,7 @@ import yaml
 import os
 import sys
 
-from src.env.pokemon_red_gym import PokemonRedGym
+from src.core.env_factory import create_environment
 
 def load_config():
     """Load the project config to check for debug flags."""
@@ -77,12 +77,14 @@ def main() -> None:
     """Run a random-policy viewer that displays the agent's observation."""
     cfg = load_config()
     env_cfg = cfg.get("environment", {}).copy()
-    
+
     # Force windowed mode for the viewer
     env_cfg["headless"] = False
     env_cfg["rom_path"] = env_cfg.get("rom_path", "pokemon_red.gb")
-    
-    env = PokemonRedGym(env_cfg)
+
+    # Use environment factory (supports hot-swapping between games)
+    game_id = cfg.get("game", "pokemon_red")
+    env = create_environment(game_id, env_cfg)
     debug_mode = cfg.get("debug", False)
 
     obs, info = env.reset()

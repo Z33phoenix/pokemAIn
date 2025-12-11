@@ -3,8 +3,6 @@ from typing import Any, Dict, Optional
 import urllib.error
 import urllib.request
 
-from src.env.game_data import map_id_to_name
-
 
 class PokemonGoalLLM:
     """
@@ -21,13 +19,25 @@ class PokemonGoalLLM:
         enabled: bool = True,
         timeout: float = 60.0,
         debug: bool = True,
+        game_data_provider: Optional[Any] = None,
     ):
-        """Configure the HTTP client for the local goal-setting LLM."""
+        """
+        Configure the HTTP client for the local goal-setting LLM.
+
+        Args:
+            api_url: URL of the local LLM API
+            model: Name of the LLM model to use
+            enabled: Whether the LLM is enabled
+            timeout: Request timeout in seconds
+            debug: Whether to print debug messages
+            game_data_provider: GameDataProvider instance for map name lookups (optional)
+        """
         self.api_url = api_url
         self.model = model
         self.enabled = enabled
         self.timeout = timeout
         self.debug = debug
+        self.game_data_provider = game_data_provider
 
     def _parse_raw_response(self, raw: str) -> Optional[Dict[str, Any]]:
         """Handle both standard JSON and potential NDJSON streaming outputs."""
@@ -93,7 +103,11 @@ class PokemonGoalLLM:
         state_summary = state_summary.copy()
         location = state_summary.get("location", {}) or {}
         if location.get("map_name") is None and "map_id" in location:
-            location["map_name"] = map_id_to_name(location["map_id"])
+            # Use game data provider if available, otherwise fallback to default name
+            if self.game_data_provider:
+                location["map_name"] = self.game_data_provider.map_id_to_name(location["map_id"])
+            else:
+                location["map_name"] = f"Map {location['map_id']}"
             state_summary["location"] = location
 
         payload = {
