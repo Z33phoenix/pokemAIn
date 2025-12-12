@@ -21,7 +21,7 @@ Pluggable RL agent for Pokémon Red with swappable components: RL algorithms (Cr
 ### Environment & Games
 - `src/core/env_factory.py` — Factory for creating game environments.
 - `src/core/game_interface.py` — Unified game interface abstraction.
-- `src/games/gb/pokemon_red_gym.py` — PyBoy wrapper for Pokémon Red/Blue.
+- `src/games/gb/pokemon_gym.py` — PyBoy wrapper for Pokémon Game Boy games (Red/Blue/Yellow/Gold/Silver/Crystal).
 - `src/games/gb/game_data.py` — Game-specific data structures and utilities.
 - `src/games/gb/ram_map.py` — Memory mapping for game state extraction.
 - `src/games/gb/text_decoder.py` — Text extraction from game memory.

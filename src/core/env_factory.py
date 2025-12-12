@@ -29,18 +29,63 @@ def _get_game_profiles() -> Dict[str, GameProfile]:
     Returns:
         Dict mapping game IDs to GameProfile objects.
     """
-    from src.games.gb.pokemon_red_gym import PokemonRedGym
+    from src.games.gb.pokemon_gym import PokemonGBGym
     from src.games.gb.game_data import PokemonRedData
 
     profiles = {
         "pokemon_red": GameProfile(
             game_id="pokemon_red",
-            game_name="Pokemon Red",
+            game_name="Pokemon Red", 
             platform="gb",
             emulator="pyboy",
             rom_extensions=[".gb"],
-            env_class=PokemonRedGym,
+            env_class=PokemonGBGym,
             data_provider_class=PokemonRedData,
+        ),
+        "pokemon_blue": GameProfile(
+            game_id="pokemon_blue",
+            game_name="Pokemon Blue",
+            platform="gb", 
+            emulator="pyboy",
+            rom_extensions=[".gb"],
+            env_class=PokemonGBGym,
+            data_provider_class=PokemonRedData,
+        ),
+        "pokemon_yellow": GameProfile(
+            game_id="pokemon_yellow",
+            game_name="Pokemon Yellow",
+            platform="gb",
+            emulator="pyboy", 
+            rom_extensions=[".gb"],
+            env_class=PokemonGBGym,
+            data_provider_class=PokemonRedData,
+        ),
+        "pokemon_gold": GameProfile(
+            game_id="pokemon_gold",
+            game_name="Pokemon Gold",
+            platform="gb",
+            emulator="pyboy",
+            rom_extensions=[".gbc", ".gb"],
+            env_class=PokemonGBGym,
+            data_provider_class=PokemonRedData,  # TODO: Create PokemonGoldData
+        ),
+        "pokemon_silver": GameProfile(
+            game_id="pokemon_silver", 
+            game_name="Pokemon Silver",
+            platform="gb",
+            emulator="pyboy",
+            rom_extensions=[".gbc", ".gb"],
+            env_class=PokemonGBGym,
+            data_provider_class=PokemonRedData,  # TODO: Create PokemonSilverData
+        ),
+        "pokemon_crystal": GameProfile(
+            game_id="pokemon_crystal",
+            game_name="Pokemon Crystal",
+            platform="gb",
+            emulator="pyboy",
+            rom_extensions=[".gbc", ".gb"],
+            env_class=PokemonGBGym,
+            data_provider_class=PokemonRedData,  # TODO: Create PokemonCrystalData
         ),
         # Future games will be added here:
         # "pokemon_emerald": GameProfile(

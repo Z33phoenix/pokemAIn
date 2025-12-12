@@ -13,13 +13,15 @@ from src.core.game_interface import GameEnvironment, MemoryInterface, GameDataPr
 from src.core.visual_processor import UnifiedVisualProcessor, create_unified_observation_space
 from src.games.gb import ram_map
 from src.games.gb.game_data import PokemonRedData
+from src.games.gb.text_decoder import TextDecoder
 
 
-class PokemonRedMemory(MemoryInterface):
+class PokemonGBMemory(MemoryInterface):
     """
-    Memory interface implementation for Pokemon Red (PyBoy).
+    Memory interface implementation for Pokemon Game Boy games (PyBoy).
 
-    Provides abstracted memory access for Pokemon Red's RAM structure.
+    Provides abstracted memory access for Pokemon GB ROM's RAM structure.
+    Works with Red, Blue, Yellow, Gold, Silver, Crystal, etc.
     """
 
     def __init__(self, pyboy_memory):
@@ -83,16 +85,16 @@ class PokemonRedMemory(MemoryInterface):
         return (hp_current / hp_max) if hp_max > 0 else 0.0
 
 
-class PokemonRedGym(GameEnvironment):
+class PokemonGBGym(GameEnvironment):
     """
-    Pokemon Red (Game Boy) environment implementation.
+    Pokemon Game Boy environment implementation.
 
     Gymnasium wrapper around PyBoy configured purely via YAML.
     Implements the GameEnvironment interface for hot-swapping.
+    Supports all Pokemon GB games: Red, Blue, Yellow, Gold, Silver, Crystal, etc.
 
-    Observations are 96x96 grayscale frames, actions are discrete button presses,
-    and info dictionaries expose a handful of RAM-derived signals for the
-    Director and reward functions.
+    Observations are unified canvas 160x240 grayscale frames, actions are discrete button presses,
+    and info dictionaries expose RAM-derived signals for the Director and reward functions.
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -150,8 +152,11 @@ class PokemonRedGym(GameEnvironment):
         self.memory = self.pyboy.memory
 
         # Create abstracted interfaces for hot-swapping
-        self._memory_interface = PokemonRedMemory(self.memory)
-        self._game_data = PokemonRedData()
+        self._memory_interface = PokemonGBMemory(self.memory)
+        # Game data provider will be configured based on ROM
+        self._game_data = self._create_game_data_provider()
+        # Text decoder for cursor-based attention
+        self.text_decoder = TextDecoder(self.pyboy)
 
         self.state_buffers: List[Tuple[str, io.BytesIO]] = []
         self._state_queue: List[int] = []
@@ -176,6 +181,17 @@ class PokemonRedGym(GameEnvironment):
 
         self.step_count = 0
         self.window_closed = False
+
+    def _create_game_data_provider(self) -> GameDataProvider:
+        """
+        Create appropriate game data provider based on ROM.
+        
+        For now, defaults to PokemonRedData which works for Red/Blue/Yellow.
+        Future versions can detect ROM type and return appropriate data provider.
+        """
+        # TODO: Add ROM detection logic to support other games (Gold/Silver/Crystal)
+        # For now, PokemonRedData works for the original GB Pokemon games
+        return PokemonRedData()
 
     def reset(self, seed: int | None = None, options: Dict[str, Any] | None = None):
         """Reset the emulator to a queued state (or ROM boot) and return (obs, info)."""

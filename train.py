@@ -287,12 +287,55 @@ class PokemonTrainer:
             self.memory.log_event(self.steps_done, "MAP_CHANGE", f"Entered {current_map_name}")
             self._last_map = current_map_name
 
-        # Note: TextDecoder removed - it's Pokemon Red specific
-        # For game-specific features like this, check game type first
-        # if isinstance(self.env, PokemonRedGym):
-        #     decoded_text = self.env.text_decoder.read_current_text()
-        #     if decoded_text:
-        #         self.memory.log_event(self.steps_done, "TEXT", decoded_text)
+        # Text decoding with cursor-based attention (works for all Pokemon GB games)
+        if hasattr(self.env, 'text_decoder'):
+            try:
+                # Debug mode disabled after initial diagnosis
+                debug_mode = False
+                
+                decoded_data = self.env.text_decoder.decode(debug=debug_mode)
+                selection = decoded_data.get('selection', '').strip()
+                narrative = decoded_data.get('narrative', '').strip()
+                
+                # Track last seen text to avoid spam
+                last_selection = getattr(self, '_last_selection', '')
+                last_narrative = getattr(self, '_last_narrative', '')
+                
+                # Always try legacy method for comparison
+                legacy_text = self.env.text_decoder.read_current_text()
+                if debug_mode and legacy_text:
+                    print(f"DEBUG: Legacy method found text: '{legacy_text}'")
+                
+                # Only output when text changes (avoid repetitive logging)
+                selection_changed = selection and selection != last_selection
+                narrative_changed = narrative and narrative != last_narrative
+                
+                if selection_changed or narrative_changed:
+                    debug_parts = []
+                    if selection_changed:
+                        debug_parts.append(f"[CURSOR→{selection}]")
+                        self.memory.log_event(self.steps_done, "CURSOR_SELECTION", selection)
+                        self._last_selection = selection
+                    if narrative_changed:
+                        debug_parts.append(f"[TEXT: {narrative}]")
+                        self.memory.log_event(self.steps_done, "NARRATIVE_TEXT", narrative)
+                        self._last_narrative = narrative
+                    
+                    # Include current map and step context for better debugging
+                    map_context = f"[{current_map_name}]" if current_map_name else "[Unknown Map]"
+                    print(f"🎮 AI Reading {map_context} Step {self.steps_done}: {' '.join(debug_parts)}")
+                
+                # Clear cached text when both are empty (dialogue closed)
+                if not selection and not narrative:
+                    self._last_selection = ''
+                    self._last_narrative = ''
+                elif debug_mode and not (selection_changed or narrative_changed):
+                    print(f"DEBUG: Same text as before at step {self.steps_done} - not logging")
+                    
+            except Exception as e:
+                if debug_mode:
+                    print(f"DEBUG: Text decoder error: {e}")
+                # Don't disrupt training for text errors
 
     def _poll_goal_strategy(self, info: Dict[str, Any], force: bool = False):
         """Query the goal strategy for a new goal."""

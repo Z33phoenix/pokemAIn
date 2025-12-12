@@ -1,10 +1,10 @@
 """
-Pokemon Red (Game Boy) game implementation.
+Pokemon Game Boy game implementation.
 
-This package contains all Pokemon Red-specific code:
-- PokemonRedGym: Main environment
-- PokemonRedData: Map/Pokemon/Item name lookups
-- PokemonRedMemory: RAM reading interface
+This package contains all Pokemon GB-specific code:
+- PokemonGBGym: Main environment (supports Red/Blue/Yellow/Gold/Silver/Crystal)
+- PokemonRedData: Map/Pokemon/Item name lookups (works for original GB games)
+- PokemonGBMemory: RAM reading interface
 - game_data: Static lookup tables
 - ram_map: Memory offset definitions
 - text_decoder: VRAM text decoding
@@ -12,7 +12,11 @@ This package contains all Pokemon Red-specific code:
 Export the main entry point for hot-swapping.
 """
 
-from src.games.gb.pokemon_red_gym import PokemonRedGym
+from src.games.gb.pokemon_gym import PokemonGBGym, PokemonGBMemory
 from src.games.gb.game_data import PokemonRedData
 
-__all__ = ['PokemonRedGym', 'PokemonRedData']
+# For backwards compatibility, provide the old name
+PokemonRedGym = PokemonGBGym
+PokemonRedMemory = PokemonGBMemory
+
+__all__ = ['PokemonGBGym', 'PokemonGBMemory', 'PokemonRedData', 'PokemonRedGym', 'PokemonRedMemory']
