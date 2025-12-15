@@ -188,6 +188,7 @@ class PokemonGBGym(GameEnvironment):
 
         self.step_count = 0
         self.window_closed = False
+        self._battle_frame_count = 0  # Track consecutive battle frames for turn estimation
 
     def _create_game_data_provider(self) -> GameDataProvider:
         """
@@ -206,6 +207,7 @@ class PokemonGBGym(GameEnvironment):
         if self.window_closed:
             raise RuntimeError("Cannot reset environment: PyBoy window is closed.")
         self.step_count = 0
+        self._battle_frame_count = 0  # Reset battle tracking
         reset_buffer = self._choose_reset_buffer()
         if reset_buffer is not None:
             self.pyboy.load_state(reset_buffer)
@@ -271,6 +273,25 @@ class PokemonGBGym(GameEnvironment):
         hp_current, hp_max = ram_map.read_player_hp(self.memory)
         return (hp_current / hp_max) if hp_max > 0 else 0.0
 
+    def _estimate_battle_turn_count(self, battle_active: bool) -> int:
+        """
+        Approximate battle duration by tracking consecutive battle_active frames.
+
+        Args:
+            battle_active: Whether battle is currently active
+
+        Returns:
+            Estimated turn count (roughly battle_frames // 80)
+        """
+        if battle_active:
+            self._battle_frame_count += 1
+        else:
+            self._battle_frame_count = 0
+
+        # Each turn is roughly 60-120 frames depending on animations
+        # Using 80 as average estimate
+        return self._battle_frame_count // 80
+
     def _get_info(self) -> Dict[str, Any]:
         """Read relevant RAM offsets into a structured info dict."""
         # 1. Battle & Health Stats (Needed for Rewards)
@@ -302,6 +323,9 @@ class PokemonGBGym(GameEnvironment):
             # Don't disrupt info gathering if text decoding fails
             pass
 
+        # 4. Battle Context (for battle-aware learning)
+        battle_turn_count = self._estimate_battle_turn_count(battle_active)
+
         return {
             # --- State for LLM & Director ---
             "map_id": current_map_id,
@@ -328,6 +352,9 @@ class PokemonGBGym(GameEnvironment):
             # --- Text Data (for detecting repetitive actions) ---
             "text_selection": text_data.get("selection", ""),
             "text_narrative": text_data.get("narrative", ""),
+
+            # --- Battle Context (for battle-aware Q-network) ---
+            "battle_turn_count": battle_turn_count,
         }
 
     def close(self):

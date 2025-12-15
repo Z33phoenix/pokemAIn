@@ -44,6 +44,7 @@ class RewardSystem:
         self.max_level_reward = 0.0
         self.consecutive_already_out = 0
         self.last_narrative = ""
+        self.cursor_history: list[Optional[str]] = []  # Track recent cursor selections for cycling detection
 
     def set_memory_interface(self, memory_interface: MemoryInterface):
         """Set the memory interface for this reward system."""
@@ -71,6 +72,7 @@ class RewardSystem:
         self.max_level_reward = 0.0
         self.consecutive_already_out = 0
         self.last_narrative = ""
+        self.cursor_history = []
 
     def compute_components(
         self,
@@ -294,6 +296,30 @@ class RewardSystem:
                 self.consecutive_already_out = 0
 
         self.last_narrative = current_narrative
+
+        # Penalty for menu cycling (oscillating between same options)
+        current_selection = info.get("text_selection", "")
+        if current_selection:
+            # Add to history (keep last 6 selections)
+            self.cursor_history.append(current_selection)
+            if len(self.cursor_history) > 6:
+                self.cursor_history.pop(0)
+
+            # Detect oscillation: if last 4 selections alternate between 2 values
+            if len(self.cursor_history) >= 4:
+                recent = self.cursor_history[-4:]
+                unique_values = set(recent)
+                if len(unique_values) == 2:
+                    # Check if it's alternating (A-B-A-B pattern)
+                    is_alternating = (recent[0] == recent[2] and
+                                     recent[1] == recent[3] and
+                                     recent[0] != recent[1])
+                    if is_alternating:
+                        menu_cycling_penalty = cfg.get("menu_cycling_penalty", -1.0)
+                        rewards["menu_reward"] += menu_cycling_penalty
+        else:
+            # Clear history when not in menu
+            self.cursor_history = []
 
         clip_value = cfg.get("reward_clip", np.inf)
         for key, value in rewards.items():

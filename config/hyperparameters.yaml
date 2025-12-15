@@ -78,11 +78,13 @@ rewards:
       cursor_match: 1.0        # Reward for cursor on target
 
   # --- Battle shaping ---
-  battle_tick: -0.001           # NEGATIVE. Battles cost energy/time. Win fast!
-  battle_damage: 2.5           # Lowered slightly to prioritize the Win
-  battle_damage_taken: -0.5    # Agent hates pain
-  battle_win: 20.0             # Must be the dominant source of reward
-  battle_loss: -10.0
+  battle_tick: -0.004           # NEGATIVE. Battles cost energy/time. Win fast!
+  battle_damage: 4.0            # Increased from 2.5 - more salient progress signal
+  battle_damage_taken: -1.0     # Increased from -0.5 - stronger aversion to damage
+  battle_win: 25.0              # Increased from 20.0 - victory more valuable
+  battle_loss: -15.0            # Increased from -10.0 - stronger deterrent
+  battle_hp_high_threshold: 0.8 # Threshold for HP maintenance bonus
+  battle_hp_high_bonus: 0.5     # Reward for maintaining high HP in battle
 
   # --- Menu handling ---
   menu:
@@ -95,6 +97,7 @@ rewards:
 
   # --- Repetitive action penalties ---
   switch_active_pokemon_penalty: -2.5  # Penalty for trying to switch to active Pokemon (escalates with repetition)
+  menu_cycling_penalty: -1.0           # Penalty for oscillating between menu options (SWITCH->STATS->SWITCH)
 
 # =============================================================================
 # Director
@@ -113,7 +116,7 @@ director:
 
 agent:
   learning_rate: 0.0003
-  gamma: 0.98
+  gamma: 0.99  # Increased from 0.98 for better long-term credit assignment (battles)
   allowed_actions: [0, 1, 2, 3, 4, 5]  # Arrows, A, B
 
 goal_llm:
