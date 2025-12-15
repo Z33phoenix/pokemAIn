@@ -280,6 +280,9 @@ class PokemonGBGym(GameEnvironment):
         else:
             map_connections, map_warps, sprites = {}, [], []
 
+        # --- Text Information (for heuristic goal setting) ---
+        text_info = self.text_decoder.decode(debug=False)
+        
         return {
             # --- State for LLM & Director ---
             "map_id": current_map_id,
@@ -302,6 +305,9 @@ class PokemonGBGym(GameEnvironment):
             "enemy_hp_percent": (enemy_hp_current / enemy_hp_max) if enemy_hp_max > 0 else 0.0,
             # Simple Party Power heuristic
             "party_power": (hp_current / hp_max) if hp_max > 0 else 0.0,
+            
+            # --- Text Information ---
+            "text_info": text_info,  # Contains 'narrative' and 'selection' keys
         }
 
     def close(self):

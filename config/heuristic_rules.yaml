@@ -1,0 +1,322 @@
+# Heuristic Goal Setting Rules Configuration
+# 
+# This file defines the X->Y->Z logic for heuristic goal setting:
+# X (narrative text + story flags) -> Y (condition matching) -> Z (goal generation)
+#
+# Add new rules here to extend the goal setting behavior without modifying code.
+
+# Story progression rules (highest priority)
+progression_rules:
+  - name: "pokemon_journey_start"
+    priority: 10
+    description: "Begin Pokemon adventure after getting starter"
+    conditions:
+      badge_count: 0
+      party_size_min: 1
+      map_id_in: [0, 1, 2]  # Pallet Town, Oak's Lab, Route 1
+      narrative_contains: ["pokemon", "adventure", "journey"]
+    goal:
+      name: "start-pokemon-journey"
+      goal_type: "NAVIGATE"
+      priority: 3
+      max_steps: 500
+      target:
+        description: "Begin Pokemon adventure"
+        objective: "story_start"
+      metadata:
+        strategy: "heuristic"
+        story_phase: "beginning"
+
+  - name: "first_gym_challenge"
+    priority: 9
+    description: "Challenge first gym leader (Brock)"
+    conditions:
+      badge_count: 0
+      party_size_min: 1
+      map_id_range: [2, 10]  # Routes and early cities
+      narrative_contains: ["gym", "leader", "brock", "pewter"]
+    goal:
+      name: "challenge-pewter-gym"
+      goal_type: "BATTLE"
+      priority: 3
+      max_steps: 400
+      target:
+        gym: "pewter"
+        leader: "brock"
+        description: "Challenge Brock at Pewter City Gym"
+      metadata:
+        strategy: "heuristic"
+        objective: "first_badge"
+
+  - name: "story_progression"
+    priority: 8
+    description: "Continue story between badges"
+    conditions:
+      badge_count_range: [1, 7]
+      battle_active: false
+      narrative_not_contains: ["wild", "battle"]
+    goal:
+      name: "continue-story"
+      goal_type: "NAVIGATE"
+      priority: 2
+      max_steps: 600
+      target:
+        description: "Progress to next story location"
+      metadata:
+        strategy: "heuristic"
+        objective: "story_progression"
+
+# NPC and building interaction rules
+interaction_rules:
+  - name: "professor_oak_starter"
+    priority: 8
+    description: "Get starter Pokemon from Professor Oak"
+    conditions:
+      map_id: 1  # Oak's Lab
+      party_size: 0
+      narrative_contains: ["oak", "pokemon", "choose"]
+    goal:
+      name: "get-starter-pokemon"
+      goal_type: "INTERACT"
+      priority: 3
+      max_steps: 150
+      target:
+        npc: "professor_oak"
+        action: "talk"
+        description: "Get starter Pokemon from Oak"
+      metadata:
+        strategy: "heuristic"
+        objective: "get_starter"
+
+  - name: "pokecenter_healing"
+    priority: 7
+    description: "Heal Pokemon when HP is low"
+    conditions:
+      hp_percentage_max: 50  # Below 50% HP
+      narrative_contains: ["heal", "pokecenter", "nurse"]
+      battle_active: false
+    goal:
+      name: "heal-pokemon"
+      goal_type: "INTERACT"
+      priority: 2
+      max_steps: 150
+      target:
+        building: "pokecenter"
+        action: "heal"
+        description: "Heal Pokemon at Pokemon Center"
+      metadata:
+        strategy: "heuristic"
+        objective: "restore_hp"
+
+  - name: "pokemart_shopping"
+    priority: 6
+    description: "Visit Pokemart to buy items"
+    conditions:
+      selection_contains: ["buy", "sell", "pokemart"]
+      narrative_contains: ["mart", "shop", "items"]
+    goal:
+      name: "visit-pokemart"
+      goal_type: "INTERACT"
+      priority: 1
+      max_steps: 200
+      target:
+        building: "pokemart"
+        action: "shop"
+        description: "Buy items at Pokemart"
+      metadata:
+        strategy: "heuristic"
+        objective: "buy_items"
+
+  - name: "building_entrance"
+    priority: 4
+    description: "Enter buildings when prompted"
+    conditions:
+      narrative_contains: ["door", "enter", "building"]
+      selection_contains: ["yes", "enter"]
+    goal:
+      name: "enter-building"
+      goal_type: "INTERACT"
+      priority: 2
+      max_steps: 50
+      target:
+        action: "enter"
+        type: "building"
+      metadata:
+        strategy: "heuristic"
+        objective: "enter_building"
+
+# Navigation and exploration rules
+navigation_rules:
+  - name: "new_route_exploration"
+    priority: 5
+    description: "Explore new route areas"
+    conditions:
+      map_id_range: [2, 50]  # Route maps
+      narrative_contains: ["route", "path", "road"]
+    goal:
+      name: "explore-new-route"
+      goal_type: "NAVIGATE"
+      priority: 1
+      max_steps: 400
+      target:
+        type: "route"
+        description: "Explore new route"
+      metadata:
+        strategy: "heuristic"
+        objective: "exploration"
+
+  - name: "city_navigation"
+    priority: 3
+    description: "Navigate to cities and towns"
+    conditions:
+      narrative_contains: ["city", "town"]
+      battle_active: false
+    goal:
+      name: "navigate-to-city"
+      goal_type: "NAVIGATE"
+      priority: 1
+      max_steps: 500
+      target:
+        type: "city"
+        description: "Navigate to city/town"
+      metadata:
+        strategy: "heuristic"
+        objective: "city_navigation"
+
+  - name: "landmark_exploration"
+    priority: 2
+    description: "Explore notable landmarks"
+    conditions:
+      narrative_contains: ["cave", "forest", "mountain", "tower"]
+    goal:
+      name: "explore-landmark"
+      goal_type: "NAVIGATE"
+      priority: 1
+      max_steps: 300
+      target:
+        type: "landmark"
+        description: "Explore landmark location"
+      metadata:
+        strategy: "heuristic"
+        objective: "landmark_exploration"
+
+# Battle-related rules
+battle_rules:
+  - name: "gym_leader_battle"
+    priority: 9
+    description: "Fight gym leaders"
+    conditions:
+      battle_active: true
+      narrative_contains: ["leader", "gym"]
+    goal:
+      name: "battle-gym-leader"
+      goal_type: "BATTLE"
+      priority: 3
+      max_steps: 200
+      target:
+        battle_type: "gym"
+        action: "fight"
+        description: "Battle gym leader"
+      metadata:
+        strategy: "heuristic"
+        objective: "gym_battle"
+
+  - name: "trainer_battle"
+    priority: 7
+    description: "Fight other trainers"
+    conditions:
+      battle_active: true
+      narrative_contains: ["trainer", "wants", "fight"]
+    goal:
+      name: "battle-trainer"
+      goal_type: "BATTLE"
+      priority: 2
+      max_steps: 150
+      target:
+        battle_type: "trainer"
+        action: "fight"
+        description: "Battle trainer"
+      metadata:
+        strategy: "heuristic"
+        objective: "trainer_battle"
+
+  - name: "wild_pokemon_battle"
+    priority: 6
+    description: "Battle wild Pokemon"
+    conditions:
+      battle_active: true
+      narrative_contains: ["wild", "appeared"]
+    goal:
+      name: "battle-wild-pokemon"
+      goal_type: "BATTLE"
+      priority: 2
+      max_steps: 100
+      target:
+        battle_type: "wild"
+        action: "fight"
+        description: "Battle wild Pokemon"
+      metadata:
+        strategy: "heuristic"
+        objective: "wild_battle"
+
+# Fallback and special situation rules
+special_rules:
+  - name: "low_health_retreat"
+    priority: 8
+    description: "Find healing when critically low on health"
+    conditions:
+      hp_percentage_max: 20  # Critical health
+      battle_active: false
+    goal:
+      name: "emergency-healing"
+      goal_type: "INTERACT"
+      priority: 3
+      max_steps: 100
+      target:
+        action: "heal"
+        priority: "emergency"
+        description: "Find immediate healing"
+      metadata:
+        strategy: "heuristic"
+        objective: "emergency_heal"
+
+  - name: "menu_navigation"
+    priority: 3
+    description: "Navigate menus when open"
+    conditions:
+      menu_open: true
+      selection_not_empty: true
+    goal:
+      name: "navigate-menu"
+      goal_type: "MENU"
+      priority: 1
+      max_steps: 50
+      target:
+        type: "menu"
+        action: "navigate"
+      metadata:
+        strategy: "heuristic"
+        objective: "menu_navigation"
+
+# Configuration for rule engine behavior
+engine_config:
+  debug: false
+  fallback_enabled: true
+  fallback_goal:
+    name: "explore-current-area"
+    goal_type: "NAVIGATE"
+    priority: 0
+    max_steps: 300
+    target:
+      description: "Explore current area"
+    metadata:
+      strategy: "heuristic"
+      rule: "fallback"
+
+  # Rule evaluation order (first match wins within priority groups)
+  rule_order:
+    - "progression_rules"
+    - "interaction_rules" 
+    - "battle_rules"
+    - "navigation_rules"
+    - "special_rules"

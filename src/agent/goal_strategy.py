@@ -173,31 +173,31 @@ class LLMGoalStrategy(GoalStrategy):
 
 
 class HeuristicGoalStrategy(GoalStrategy):
-    """Uses hand-crafted rules to generate exploration goals."""
+    """Uses intelligent heuristic rules to generate context-aware goals."""
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        self.update_frequency = config.get("heuristic_goal_frequency", 500)
+        from src.agent.heuristic_goal_engine import HeuristicGoalEngine
+        
+        self.update_frequency = config.get("heuristic_goal_frequency", 300)
+        self.goal_engine = HeuristicGoalEngine(config)
+        self.allowed_goal_types = config.get("allowed_goal_types", {"NAVIGATE", "INTERACT", "BATTLE", "MENU", "SEARCH"})
 
     def should_generate_goal(self, step: int, update_frequency: int) -> bool:
         """Generate goals at configured frequency."""
         return step % self.update_frequency == 0
 
     def generate_goal(self, state_summary: Dict[str, Any], director: Any) -> Optional[Goal]:
-        """Create a simple exploration goal based on current location."""
-        current_info = state_summary.get("current_info", {})
-        current_map = current_info.get("map_id", 0)
-
-        # Simple heuristic: explore the current map
-        return Goal(
-            name=f"heuristic-explore-{current_map}",
-            goal_type="NAVIGATE",
-            priority=0,
-            target={"map_id": current_map, "description": "Explore current area"},
-            max_steps=200,
-            metadata={"strategy": "heuristic", "reason": "Systematic exploration"},
-            goal_vector=None
-        )
+        """Generate intelligent goals using heuristic rule engine."""
+        goal = self.goal_engine.generate_goal(state_summary, director)
+        
+        # Filter by allowed goal types
+        if goal and goal.goal_type not in self.allowed_goal_types:
+            if self.goal_engine.debug:
+                print(f"[HEURISTIC] Filtered goal type '{goal.goal_type}' not in allowed types")
+            return None
+            
+        return goal
 
 
 class NoGoalStrategy(GoalStrategy):
