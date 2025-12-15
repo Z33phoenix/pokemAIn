@@ -240,7 +240,7 @@ class CrossQBrain(RLBrain):
             "brain/td_error": td_error_mean,
             "brain/epsilon": self.epsilon,
             "brain/buffer_size": len(self.replay_buffer),
-            "brain/max_priority": self.replay_buffer.max_priority,
+            "brain/max_replay_buffer_priority": self.replay_buffer.max_priority,
         }
 
         return loss, metrics

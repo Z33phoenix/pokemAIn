@@ -132,7 +132,8 @@ class GoalAwareRewardStrategy(RewardStrategy):
             completion_reward
         )
 
-        clipped = float(np.clip(total, -10, 10))
+        # Use tighter clipping for stability (matches rewards.reward_clip)
+        clipped = float(np.clip(total, -5, 5))
 
         return {
             "total": clipped,
@@ -234,7 +235,8 @@ class BaseRewardStrategy(RewardStrategy):
             badge_reward
         )
 
-        clipped = float(np.clip(total, -10, 10))
+        # Use tighter clipping for stability (matches rewards.reward_clip)
+        clipped = float(np.clip(total, -5, 5))
 
         return {
             "total": clipped,
@@ -297,7 +299,8 @@ class HybridRewardStrategy(RewardStrategy):
             badge_reward
         )
 
-        clipped = float(np.clip(total, -10, 10))
+        # Use tighter clipping for stability (matches rewards.reward_clip)
+        clipped = float(np.clip(total, -5, 5))
 
         return {
             "total": clipped,

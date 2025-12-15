@@ -56,6 +56,9 @@ class RewardSystem:
         # Running from trainer battle tracking
         self.consecutive_run_attempts = 0
 
+        # Post-battle grace period to ignore stale text penalties
+        self.post_battle_grace_steps = 0
+
     def set_memory_interface(self, memory_interface: MemoryInterface):
         """Set the memory interface for this reward system."""
         self._memory_interface = memory_interface
@@ -87,6 +90,7 @@ class RewardSystem:
         self.battle_turns = 0
         self.menu_open_steps = 0
         self.consecutive_run_attempts = 0
+        self.post_battle_grace_steps = 0
 
     def compute_components(
         self,
@@ -107,7 +111,11 @@ class RewardSystem:
         """
         cfg = self.config
         battle_active = info.get("battle_active", False)
-        
+
+        # Decrement post-battle grace period
+        if self.post_battle_grace_steps > 0:
+            self.post_battle_grace_steps -= 1
+
         # Reduce step penalty during battles to not overwhelm damage rewards
         step_penalty = cfg.get("step_penalty", 0.0)
         if battle_active:
@@ -155,62 +163,69 @@ class RewardSystem:
             self.seen_coords.add(coord)
             rewards["nav_reward"] += cfg.get("new_tile", 0.0)
 
-        moved = coord != self.last_coord
-        if not moved and action < 4:
-            rewards["nav_reward"] += cfg.get("wall_bump", 0.0)
-            self.steps_stagnant += 1
-            if self.steps_stagnant > cfg.get("stale_threshold", 0):
-                rewards["nav_reward"] += cfg.get("stale_penalty", 0.0)
+        # Skip movement penalties during battles - player can't move on overworld
+        if not battle_active:
+            moved = coord != self.last_coord
+            if not moved and action < 4:
+                self.steps_stagnant += 1
+                # Only apply wall_bump penalty after 3+ consecutive failed moves
+                if self.steps_stagnant >= 3:
+                    rewards["nav_reward"] += cfg.get("wall_bump", 0.0)
+                # Apply stale penalty after threshold
+                if self.steps_stagnant > cfg.get("stale_threshold", 50):
+                    rewards["nav_reward"] += cfg.get("stale_penalty", 0.0)
+            else:
+                self.steps_stagnant = 0
+                self.last_coord = coord
         else:
+            # Reset stagnation counter when entering battle
             self.steps_stagnant = 0
-            self.last_coord = coord
 
-        if map_width and map_height and connection_count:
-            # Reward reaching map edges that have connections defined to encourage transitions.
-            edge_reward = cfg.get("nav_connection_edge", 0.0)
-            if edge_reward != 0.0:
-                if map_connections.get("north", {}).get("exists") and y == 0:
-                    dest_map = map_connections.get("north", {}).get("dest_map")
-                    if dest_map is not None and not self._edge_exists(map_id, dest_map):
-                        rewards["nav_reward"] += edge_reward
-                if map_connections.get("south", {}).get("exists") and y == (map_height * 2 - 1): # Block units conversion check needed? usually height is blocks.
-                    # Assuming height is in blocks (2x2 tiles), y is in tiles.
-                    # Usually map_height * 2 - 1 is the bottom edge in tiles.
-                    # However, read_map_height returns blocks. 
-                    dest_map = map_connections.get("south", {}).get("dest_map")
-                    if dest_map is not None and not self._edge_exists(map_id, dest_map):
-                        rewards["nav_reward"] += edge_reward
-                if map_connections.get("west", {}).get("exists") and x == 0:
-                    dest_map = map_connections.get("west", {}).get("dest_map")
-                    if dest_map is not None and not self._edge_exists(map_id, dest_map):
-                        rewards["nav_reward"] += edge_reward
-                if map_connections.get("east", {}).get("exists") and x == (map_width * 2 - 1):
-                    dest_map = map_connections.get("east", {}).get("dest_map")
-                    if dest_map is not None and not self._edge_exists(map_id, dest_map):
-                        rewards["nav_reward"] += edge_reward
-        
-        # Reward reaching warp tiles to encourage entering/exiting buildings.
-        warp_bonus = cfg.get("nav_warp", 0.0)
-        warp_proximity = cfg.get("nav_warp_proximity", 0.0)
-        if map_warps:
-            for warp in map_warps:
-                wx, wy = warp.get("x"), warp.get("y")
-                dest_map = warp.get("dest_map")
-                edge_known = self._edge_exists(map_id, dest_map)
-                if wx is None or wy is None:
-                    continue
-                if x == wx and y == wy:
-                    key = (map_id, wx, wy)
-                    if not edge_known and dest_map is not None and key not in self.visited_warps:
-                        rewards["nav_reward"] += warp_bonus
-                        self.visited_warps.add(key)
-                else:
-                    # Small shaping toward warps that lead to unexplored maps.
-                    dist = abs(int(wx) - int(x)) + abs(int(wy) - int(y))
-                    if warp_proximity and dist > 0 and not edge_known and dest_map is not None:
-                        rewards["nav_reward"] += warp_proximity / float(dist)
+        # Skip all position-based nav rewards during battles
+        if not battle_active:
+            if map_width and map_height and connection_count:
+                # Reward reaching map edges that have connections defined to encourage transitions.
+                edge_reward = cfg.get("nav_connection_edge", 0.0)
+                if edge_reward != 0.0:
+                    if map_connections.get("north", {}).get("exists") and y == 0:
+                        dest_map = map_connections.get("north", {}).get("dest_map")
+                        if dest_map is not None and not self._edge_exists(map_id, dest_map):
+                            rewards["nav_reward"] += edge_reward
+                    if map_connections.get("south", {}).get("exists") and y == (map_height * 2 - 1):
+                        dest_map = map_connections.get("south", {}).get("dest_map")
+                        if dest_map is not None and not self._edge_exists(map_id, dest_map):
+                            rewards["nav_reward"] += edge_reward
+                    if map_connections.get("west", {}).get("exists") and x == 0:
+                        dest_map = map_connections.get("west", {}).get("dest_map")
+                        if dest_map is not None and not self._edge_exists(map_id, dest_map):
+                            rewards["nav_reward"] += edge_reward
+                    if map_connections.get("east", {}).get("exists") and x == (map_width * 2 - 1):
+                        dest_map = map_connections.get("east", {}).get("dest_map")
+                        if dest_map is not None and not self._edge_exists(map_id, dest_map):
+                            rewards["nav_reward"] += edge_reward
 
-        # Track traversed map-to-map edges (warps and boundaries are treated the same).
+            # Reward reaching warp tiles to encourage entering/exiting buildings.
+            warp_bonus = cfg.get("nav_warp", 0.0)
+            warp_proximity = cfg.get("nav_warp_proximity", 0.0)
+            if map_warps:
+                for warp in map_warps:
+                    wx, wy = warp.get("x"), warp.get("y")
+                    dest_map = warp.get("dest_map")
+                    edge_known = self._edge_exists(map_id, dest_map)
+                    if wx is None or wy is None:
+                        continue
+                    if x == wx and y == wy:
+                        key = (map_id, wx, wy)
+                        if not edge_known and dest_map is not None and key not in self.visited_warps:
+                            rewards["nav_reward"] += warp_bonus
+                            self.visited_warps.add(key)
+                    else:
+                        # Small shaping toward warps that lead to unexplored maps.
+                        dist = abs(int(wx) - int(x)) + abs(int(wy) - int(y))
+                        if warp_proximity and dist > 0 and not edge_known and dest_map is not None:
+                            rewards["nav_reward"] += warp_proximity / float(dist)
+
+        # Track traversed map-to-map edges (always, even after battle ends)
         if prev_map_id is None:
             self.last_map_id = map_id
         elif map_id != prev_map_id:
@@ -218,9 +233,10 @@ class RewardSystem:
                 rewards["nav_reward"] += cfg.get("nav_new_connection", 0.0)
             self.last_map_id = map_id
 
-        # Directional shaping: reward alignment with an explicit goal vector if provided.
-        if goal_ctx:
+        # Directional shaping: only when not in battle and actually moved
+        if not battle_active and goal_ctx:
             goal_vec = goal_ctx.get("goal_vector")
+            moved = coord != self.last_coord
             if goal_vec and moved:
                 dx = x - prev_coord[1]
                 dy = y - prev_coord[2]
@@ -267,22 +283,28 @@ class RewardSystem:
         else:
             if self.was_in_battle:
                 # Battle just ended - check if we won or lost
+                # Win = we still have HP, Loss = we blacked out (HP near 0 or respawned)
                 hp_percent = info.get("hp_percent", 1.0)
-                battle_loss_threshold = cfg.get("battle_loss_threshold", 0.0)
+                battle_loss_threshold = cfg.get("battle_loss_threshold", 0.15)  # Default: below 15% HP = loss
                 battle_win_reward = cfg.get("battle_win", 0.0)
                 battle_loss_reward = cfg.get("battle_loss", 0.0)
-                
-                if hp_percent < battle_loss_threshold:
+
+                # Check for black out: HP very low OR sudden map change to Pokemon Center
+                blacked_out = hp_percent <= battle_loss_threshold
+
+                if blacked_out:
                     rewards["battle_reward"] += battle_loss_reward
-                    print(f"💀 BATTLE LOST! HP: {hp_percent:.1%} → Reward: {battle_loss_reward}")
                 else:
                     rewards["battle_reward"] += battle_win_reward
-                    print(f"🏆 BATTLE WON! HP: {hp_percent:.1%} → Reward: {battle_win_reward}")
-                
-                # Reset battle tracking
-                print(f"📊 BATTLE END: Total battle rewards this fight: {self.current_battle_rewards:.1f}")
                 self.current_battle_rewards = 0.0
                 self.battle_turns = 0
+                # Reset ALL penalty counters to prevent post-battle penalty explosions
+                self.consecutive_already_out = 0
+                self.consecutive_run_attempts = 0
+                self.cursor_history = []
+                self.menu_open_steps = 0  # Reset menu timeout to not penalize post-battle menus
+                self.last_narrative = ""  # Clear narrative to prevent stale text triggering penalties
+                self.post_battle_grace_steps = 50  # Grace period to ignore stale text in VRAM
             elif not self.was_in_battle:
                 # Not in battle, reset counters
                 self.battle_turns = 0
@@ -303,19 +325,11 @@ class RewardSystem:
                 
                 if enemy_delta > 0:
                     damage_reward = cfg.get("battle_damage", 0.0) * enemy_delta
-                    original_damage_reward = damage_reward
-                    
+
                     # Cap battle damage rewards to prevent farming
                     if self.current_battle_rewards + damage_reward > max_battle_reward_per_battle:
                         damage_reward = max(0, max_battle_reward_per_battle - self.current_battle_rewards)
-                        was_capped = True
-                    else:
-                        was_capped = False
-                    
-                    # Only log when actual damage occurs
-                    print(f"💥 DAMAGE DEALT! Enemy HP: {enemy_hp_percent:.1%} → Δ{enemy_delta:.1%} → Reward: {damage_reward:.3f}" + 
-                          (f" (capped from {original_damage_reward:.3f})" if was_capped else ""))
-                    
+
                     rewards["battle_reward"] += damage_reward
                     self.current_battle_rewards += damage_reward
                     
@@ -333,21 +347,19 @@ class RewardSystem:
 
         rewards["global_reward"] += self._compute_level_reward_bonus()
 
-        # Track menu timeout and apply escalating penalties (EXCLUDE battle menus)
+        # Track menu timeout (EXCLUDE battle menus and grace period)
+        # FIX: Simplified linear penalty, lower magnitude
         menu_active = self._menu_active(info)
         battle_active = info.get("battle_active", False)
-        
-        # Only apply menu timeout penalties to NON-battle menus
-        if menu_active and not battle_active:
+
+        if menu_active and not battle_active and self.post_battle_grace_steps == 0:
             self.menu_open_steps += 1
-            # Apply escalating penalty for staying in menus too long
-            if self.menu_open_steps > 10:  # After 10 steps in menu
-                timeout_penalty = cfg.get("menu", {}).get("menu_timeout_penalty", -5.0)
-                # Exponentially worse the longer you stay
-                multiplier = min((self.menu_open_steps - 10) * 0.5, 5.0)
-                rewards["menu_reward"] += timeout_penalty * multiplier
-        else:
-            # Reset counter when not in non-battle menus
+            # Mild linear penalty after 15 steps in menu, capped
+            if self.menu_open_steps > 15:
+                timeout_penalty = cfg.get("menu", {}).get("menu_timeout_penalty", -0.5)
+                multiplier = min((self.menu_open_steps - 15) * 0.1, 2.0)
+                rewards["menu_reward"] += timeout_penalty * (1.0 + multiplier)
+        elif not menu_active or battle_active:
             self.menu_open_steps = 0
 
         rewards["menu_reward"] += self.compute_menu_reward(info, goal_ctx)
@@ -355,109 +367,79 @@ class RewardSystem:
             info, goal_ctx, prev_hp_fraction=prev_hp_fraction, was_in_battle_prev=was_in_battle_prev
         )
 
-        # SEVERE penalty for repeatedly trying to switch to active Pokemon
+        # Skip text-based penalties during post-battle grace period (stale VRAM text)
+        in_grace_period = self.post_battle_grace_steps > 0
+
+        # Penalty for repeatedly trying to switch to active Pokemon
+        # FIX: Apply to SINGLE channel only, use LINEAR scaling
         current_narrative = info.get("text_narrative", "")
-        if current_narrative and "already out" in current_narrative.lower():
+        if not in_grace_period and current_narrative and "already out" in current_narrative.lower():
             # This message appears when trying to switch to the active Pokemon
             if current_narrative == self.last_narrative:
-                # Same message as before - increment counter
                 self.consecutive_already_out += 1
             else:
-                # New instance of the message
                 self.consecutive_already_out = 1
 
-            # Apply SEVERE escalating penalty based on repetitions
-            base_penalty = cfg.get("switch_active_pokemon_penalty", -10.0)
-            # Scale penalty with consecutive attempts (gets exponentially worse)
-            penalty_multiplier = min(self.consecutive_already_out ** 1.5, 10)  # Exponential scaling, cap at 10x
-            severe_penalty = base_penalty * penalty_multiplier
-            
-            # Apply penalty, but reduce during battles to allow learning
-            battle_active = info.get("battle_active", False)
-            penalty_scale = 0.2 if battle_active else 1.0  # 80% reduction during battles
-            
-            scaled_penalty = severe_penalty * penalty_scale
-            rewards["menu_reward"] += scaled_penalty
-            rewards["battle_reward"] += scaled_penalty * 0.5
-            rewards["global_reward"] += scaled_penalty * 0.3
+            # LINEAR scaling instead of exponential, capped at 3x
+            base_penalty = cfg.get("switch_active_pokemon_penalty", -2.0)
+            penalty_multiplier = min(self.consecutive_already_out * 0.5, 3.0)
+            penalty = base_penalty * (1.0 + penalty_multiplier)
+
+            # Apply to SINGLE channel only (menu_reward)
+            rewards["menu_reward"] += penalty
         else:
-            # Reset counter if we're not seeing the "already out" message
             if self.last_narrative and "already out" in self.last_narrative.lower():
                 self.consecutive_already_out = 0
 
-        # SEVERE penalty for repeatedly trying to run from trainer battles
-        if current_narrative and any(phrase in current_narrative.lower() for phrase in 
+        # Penalty for repeatedly trying to run from trainer battles
+        # FIX: Apply to SINGLE channel only, use LINEAR scaling
+        if not in_grace_period and current_narrative and any(phrase in current_narrative.lower() for phrase in
                                    ["can't escape", "no! there's no running", "couldn't get away", "can't run away"]):
-            # This message appears when trying to run from trainer battles
             if current_narrative == self.last_narrative:
-                # Same message as before - increment counter
                 self.consecutive_run_attempts += 1
             else:
-                # New instance of the message
                 self.consecutive_run_attempts = 1
 
-            # Apply SEVERE escalating penalty based on repetitions
-            base_penalty = cfg.get("run_from_trainer_penalty", -12.0)
-            # Scale penalty with consecutive attempts (gets exponentially worse)
-            penalty_multiplier = min(self.consecutive_run_attempts ** 1.5, 8)  # Exponential scaling, cap at 8x
-            severe_penalty = base_penalty * penalty_multiplier
-            
-            # Apply penalty, but reduce during battles to allow learning  
-            penalty_scale = 0.2 if battle_active else 1.0  # 80% reduction during battles
-            
-            scaled_penalty = severe_penalty * penalty_scale
-            rewards["battle_reward"] += scaled_penalty
-            rewards["menu_reward"] += scaled_penalty * 0.5
-            rewards["global_reward"] += scaled_penalty * 0.3
-            
-            print(f"🚫 CAN'T RUN FROM TRAINER! Attempt #{self.consecutive_run_attempts} → Penalty: {severe_penalty:.1f}")
+            # LINEAR scaling instead of exponential, capped at 3x
+            base_penalty = cfg.get("run_from_trainer_penalty", -2.0)
+            penalty_multiplier = min(self.consecutive_run_attempts * 0.5, 3.0)
+            penalty = base_penalty * (1.0 + penalty_multiplier)
+
+            # Apply to SINGLE channel only (battle_reward)
+            rewards["battle_reward"] += penalty
         else:
-            # Reset counter if we're not seeing the "can't run" message
-            if self.last_narrative and any(phrase in self.last_narrative.lower() for phrase in 
+            if self.last_narrative and any(phrase in self.last_narrative.lower() for phrase in
                                          ["can't escape", "no! there's no running", "couldn't get away", "can't run away"]):
                 self.consecutive_run_attempts = 0
 
         self.last_narrative = current_narrative
 
         # Penalty for menu cycling (oscillating between same options)
+        # FIX: Lower penalty magnitude
         current_selection = info.get("text_selection", "")
-        if current_selection:
-            # Add to history (keep last 6 selections)
+        if current_selection and not in_grace_period:
             self.cursor_history.append(current_selection)
             if len(self.cursor_history) > 6:
                 self.cursor_history.pop(0)
 
-            # Detect oscillation: if last 4 selections alternate between 2 values
             if len(self.cursor_history) >= 4:
                 recent = self.cursor_history[-4:]
                 unique_values = set(recent)
                 if len(unique_values) == 2:
-                    # Check if it's alternating (A-B-A-B pattern)
                     is_alternating = (recent[0] == recent[2] and
                                      recent[1] == recent[3] and
                                      recent[0] != recent[1])
                     if is_alternating:
-                        menu_cycling_penalty = cfg.get("menu_cycling_penalty", -1.0)
-                        # Reduce menu cycling penalty during battles
-                        if battle_active:
-                            menu_cycling_penalty *= 0.3  # 70% reduction during battles
+                        # FIX: Much lower penalty
+                        menu_cycling_penalty = cfg.get("menu_cycling_penalty", -0.5)
                         rewards["menu_reward"] += menu_cycling_penalty
-        else:
-            # Clear history when not in menu
+        elif not current_selection:
             self.cursor_history = []
 
         clip_value = cfg.get("reward_clip", np.inf)
         for key, value in rewards.items():
             rewards[key] = float(np.clip(value, -clip_value, clip_value))
-        
-        # DEBUG: Log when total reward is extremely negative
-        total_reward = sum(rewards.values())
-        if total_reward < -50:
-            print(f"🚨 HUGE NEGATIVE REWARD: {total_reward:.1f}")
-            for component, value in rewards.items():
-                if abs(value) > 0.1:
-                    print(f"   {component}: {value:.1f}")
-        
+
         return rewards
 
     def compute_reward(self, info: Dict[str, Any], obs, action: int) -> float:

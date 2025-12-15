@@ -27,87 +27,83 @@ training:
   total_steps: 50000
   warmup_steps: 1000
   batch_size: 32
-  save_frequency: 2000
-  fast_update_frequency: 4
-  reward_clip: 5.0
-  epsilon:
-    start: 1.0  # Start with full exploration
-    end: 0.02  # Lower final epsilon for sparse rewards
-    decay: 150000  # Much slower decay for Pokemon's complexity
+  save_frequency: 5000
+  fast_update_frequency: 1
+  reward_clip: 15.0            # Match rewards.reward_clip for consistency
+  # Note: epsilon is configured in config/brain_configs.yaml under each brain type
 
 # =============================================================================
 # Rewards
 # =============================================================================
 rewards:
-  # --- Global progression ---
-  step_penalty: -0.002         # Increased to prevent idle farming
-  reward_clip: 10.0            # Lower cap to prevent explosions
-  catch_pokemon: 20.0          # Higher value for rare positive events
-  level_up: 25.0               # Significantly boosted for major milestones
-  heal_success: 8.0            # Increased to encourage survival behavior
+  # --- Global progression (BALANCED for stable learning) ---
+  step_penalty: 0.0           # No idle penalty
+  reward_clip: 15.0            # Wider clip to let amplified battle rewards come through
+  catch_pokemon: 10.0          # Moderate reward for catching
+  level_up: 12.0               # Clear milestone signal
+  heal_success: 4.0            # Encourage survival
   heal_target: 0.85
-  level_reward_scale: 1.5      # Increased scaling for level progression
-  
-  # --- Intrinsic motivation for sparse rewards (DISABLED - causing exploitation) ---
-  state_novelty_bonus: 0.0     # DISABLED: Was causing battle start screen farming
-  action_diversity_bonus: 0.0  # DISABLED: Not implemented, preventing confusion
-  progress_consistency_bonus: 0.0  # DISABLED: Was rewarding non-progress
+  level_reward_scale: 0.8      # Moderate scaling
 
-  # --- Exploration / Navigation ---
-  new_tile: 1.0                # Doubled for better exploration signal
-  new_map: 10.0                # Significantly increased for major discoveries
-  nav_new_connection: 12.0     # Doubled for finding new paths
-  nav_connection_edge: 2.0     # Increased edge bonus
-  nav_warp: 5.0                # Doubled warp bonus
-  nav_warp_proximity: 0.2      # Small shaping towards unexplored warps
+  # --- Intrinsic motivation (DISABLED) ---
+  state_novelty_bonus: 0.0
+  action_diversity_bonus: 0.0
+  progress_consistency_bonus: 0.0
+
+  # --- Exploration / Navigation (BALANCED) ---
+  new_tile: 0.5                # Small but consistent exploration reward
+  new_map: 5.0                 # Clear signal for map discovery
+  nav_new_connection: 6.0      # Finding new paths
+  nav_connection_edge: 1.0     # Edge bonus
+  nav_warp: 3.0                # Warp bonus
+  nav_warp_proximity: 0.1      # Small shaping towards unexplored warps
   
-  # CRITICAL FIXES:
-  wall_bump: -0.2              # Punishment
-  stale_penalty: -0.5
-  stale_threshold: 100
+  # Movement penalties (only after repeated failures)
+  wall_bump: -0.05             # Mild penalty per bump (accumulates if stuck)
+  stale_penalty: -0.1          # Penalty for being completely stuck
+  stale_threshold: 50          # Steps before stale penalty kicks in
   
-  # direction_follow_bonus: 0.75  <-- DELETE THIS or Change to 0.0
-  # Instead, only reward reaching the specific target tile:
+  # Goal-based rewards (only active when using LLM/heuristic strategies)
   goal_bonus:
     explore:
-      map_match: 6.0
-      coordinate_match: 10.0   # Big payout for ARRIVING, not for moving
+      map_match: 3.0           # Reaching target map
+      coordinate_match: 5.0    # Reaching exact target
 
     train:
-      battle_complete: 12.0    # Reward for completing training battles
+      battle_complete: 5.0     # Completing training battles
 
     survive:
-      hp_recovered: 3.0        # Reward for healing after battles
+      hp_recovered: 2.0        # Healing after battles
 
     menu:
-      menu_reached: 0.0        # REMOVED: No reward for just reaching menus
-      cursor_match: 0.5        # Reduced reward for cursor targeting
+      menu_reached: 0.0        # No reward for just reaching menus
+      cursor_match: 0.3        # Small reward for cursor targeting
 
-  # --- Battle shaping (High damage rewards) ---
-  battle_tick: -0.005           # Reduced penalty during battles to not overwhelm damage rewards
-  battle_damage: 15.0           # MUCH higher - make damage clearly rewarding
-  battle_damage_taken: -0.5     # Mild penalty for taking damage
-  battle_win: 20.0              # Increased for major victories
-  battle_loss: -5.0             # Milder loss penalty
+  # --- Battle shaping (Balanced rewards) ---
+  battle_tick: -0.02            # Stronger time pressure so battles register
+  battle_damage: 50.0           # 10x louder signal for making progress
+  battle_damage_taken: -3.0     # 10x louder penalty for taking damage
+  battle_win: 80.0              # 10x clearer victory signal
+  battle_loss: -30.0            # 10x clearer loss penalty
   battle_hp_high_threshold: 0.8 # Threshold for HP maintenance bonus
-  battle_hp_high_bonus: 0.2     # Reduced from 0.5
-  max_battle_reward_per_battle: 40.0   # Higher cap for increased damage rewards
-  min_battle_penalty_per_battle: -20.0 # NEW: Cap total penalties per battle
+  battle_hp_high_bonus: 0.5     # Small bonus for staying healthy
+  max_battle_reward_per_battle: 150.0   # Higher cap to match amplified rewards
+  min_battle_penalty_per_battle: -100.0 # Cap total penalties per battle
 
   # --- Menu handling ---
   menu:
-    opened_menu: -0.5          # Higher cost to discourage menu spam
-    cursor_move: -0.01         # Higher cost for cursor movement
+    opened_menu: -0.03         # Tiny cost to discourage menu spam
+    cursor_move: -0.001        # Very small cost for cursor movement
     cursor_on_target: 0.0      # Don't reward hovering
-    correct_target: 2.0        # Reduced reward for selection
-    inactive_penalty: -0.1
+    correct_target: 0.5        # Small reward for selection
+    inactive_penalty: 0.0      # DISABLED: Was penalizing normal exploration
     close_penalty: 0.0
-    menu_timeout_penalty: -5.0 # NEW: Penalty for staying too long in menus
+    menu_timeout_penalty: -0.08 # Mild penalty for staying too long in menus
 
-  # --- Repetitive action penalties ---
-  switch_active_pokemon_penalty: -15.0  # EVEN MORE SEVERE penalty 
-  menu_cycling_penalty: -8.0            # MUCH STRONGER cycling penalty
-  run_from_trainer_penalty: -12.0       # SEVERE penalty for trying to run from trainer battles
+  # --- Repetitive action penalties (REDUCED - single channel, linear scaling) ---
+  switch_active_pokemon_penalty: -0.4   # Base penalty, scales linearly up to 3x
+  menu_cycling_penalty: -0.1            # Mild cycling penalty
+  run_from_trainer_penalty: -1.0        # Base penalty, scales linearly up to 3x
 
 # =============================================================================
 # Director
@@ -125,11 +121,11 @@ director:
     quantization_step: 32
 
 agent:
-  learning_rate: 0.00005  # Reduced for stable convergence in sparse environment
-  gamma: 0.995  # Higher for better long-term credit assignment in Pokemon
+  learning_rate: 0.0001    # Slightly higher for faster learning
+  gamma: 0.99              # Lower for more stable Q-values
   allowed_actions: [0, 1, 2, 3, 4, 5]  # Arrows, A, B
   buffer_capacity: 100000  # Larger buffer for better sample diversity
-  min_buffer_size: 2000  # Higher threshold before training starts
+  min_buffer_size: 2000    # Higher threshold before training starts
 
 goal_llm:
   enabled: True

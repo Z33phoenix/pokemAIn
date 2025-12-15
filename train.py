@@ -35,12 +35,11 @@ import argparse
 import sys
 import io
 
-# Set UTF-8 encoding for Windows console output
+# Set UTF-8 encoding for Windows console output with line buffering for real-time output
 if sys.platform == 'win32':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
 import os
-import glob
 import random
 from typing import Any, Dict, Tuple, Optional
 import numpy as np
@@ -106,6 +105,9 @@ class TrainingConfig:
         cfg["training"] = cfg.get("training", {}).copy()
         if total_steps is not None:
             cfg["training"]["total_steps"] = total_steps
+        training_steps = cfg["training"].get("total_steps")
+        if training_steps is not None:
+            env_cfg["max_steps"] = int(training_steps)
         cfg["environment"] = env_cfg
         return cfg
 
@@ -148,8 +150,6 @@ class PokemonTrainer:
         self.episode_count = 0
         self.episode_reward = 0.0
         self.episode_steps = 0
-        self.save_dir = cfg.get("saves_dir", "saves")
-        os.makedirs(self.save_dir, exist_ok=True)
         self._text_embedding_dim = 17
         self._zero_text_embedding = np.zeros(self._text_embedding_dim, dtype=np.float32)
         self._current_cursor_embedding = self._zero_text_embedding.copy()
@@ -235,7 +235,7 @@ class PokemonTrainer:
         self._update_memory(info)
         self._poll_goal_strategy(info, force=True)
 
-        pbar = tqdm(total=self.total_steps)
+        pbar = tqdm(total=self.total_steps, file=sys.stderr, dynamic_ncols=True)
         self.goal_step_count = 0
 
         while self.steps_done < self.total_steps:
@@ -303,28 +303,11 @@ class PokemonTrainer:
         obs, info = self.env.reset()
         self.reward_sys.reset()
 
-        # Load latest badge save
-        ckpt_path = self._get_latest_checkpoint()
-        if ckpt_path and os.path.exists(ckpt_path):
-            self.env.load_state(ckpt_path)
-            obs, info = self.env._get_obs(), self.env._get_info()
-
         self.current_badges = info.get("badges", 0)
         self.episode_reward = 0.0
         self.episode_steps = 0
         self.goal_step_count = 0
         return obs, info
-
-    def _get_latest_checkpoint(self) -> str | None:
-        """Find save with highest badge count."""
-        saves = glob.glob(os.path.join(self.save_dir, "badge_*.state"))
-        if not saves:
-            return None
-        try:
-            latest = max(saves, key=lambda p: int(os.path.basename(p).split('_')[1].split('.')[0]))
-            return latest
-        except:
-            return None
 
     def _update_memory(self, info: Dict[str, Any]) -> np.ndarray:
         """Check for sensory inputs, log them, and update text embeddings."""
@@ -359,25 +342,24 @@ class PokemonTrainer:
                 # The decoder now handles completion detection, so any narrative here is ready to log
                 narrative_changed = narrative and narrative != last_narrative
 
-                # Only output when selection changes or narrative is NEW
+                # Track selection and narrative changes for progress bar display
                 if selection_changed or narrative_changed:
-                    debug_parts = []
                     if selection_changed:
-                        debug_parts.append(f"[CURSOR→{selection}]")
                         self.memory.log_event(self.steps_done, "CURSOR_SELECTION", selection)
                         self._last_selection = selection
+                        # Store for progress bar display (truncate if too long)
+                        self._current_cursor_display = selection[:30] if len(selection) > 30 else selection
                     if narrative_changed:
-                        debug_parts.append(f"[TEXT: {narrative}]")
                         self.memory.log_event(self.steps_done, "NARRATIVE_TEXT", narrative)
                         self._last_narrative = narrative
-
-                    # Include current map and step context for better debugging
-                    map_context = f"[{current_map_name}]" if current_map_name else "[Unknown Map]"
-                    print(f"🎮 AI Reading {map_context} Step {self.steps_done}: {' '.join(debug_parts)}")
+                        # Important narratives get printed (battle messages, etc.)
+                        if any(kw in narrative.lower() for kw in ['damage', 'fainted', 'won', 'lost', 'caught']):
+                            print(f"📜 {narrative}")
 
                 # Clear cached selection when empty (dialogue closed)
                 if not selection:
                     self._last_selection = ''
+                    self._current_cursor_display = ''
 
             except Exception as e:
                 if debug_mode:
@@ -594,9 +576,7 @@ class PokemonTrainer:
         new_badges = next_info.get("badges", 0)
         if new_badges > self.current_badges:
             self.current_badges = new_badges
-            save_path = os.path.join(self.save_dir, f"badge_{new_badges}.state")
-            self.env.save_state(save_path)
-            self.memory.log_event(self.steps_done, "SYSTEM", f"Badge Earned! Saved to {save_path}")
+            self.memory.log_event(self.steps_done, "SYSTEM", f"Badge Earned! Total badges: {new_badges}")
 
         return reward_data
 
@@ -605,6 +585,13 @@ class PokemonTrainer:
             return
 
         metrics = {"reward/total": reward_data["total"]}
+
+        # Log individual reward components for debugging
+        components = reward_data.get("components", {})
+        if components:
+            for comp_name, comp_value in components.items():
+                metrics[f"reward/{comp_name}"] = comp_value
+
         metrics.update(self.director.get_goal_metrics())
         metrics.update(brain_metrics)
         self.logger.log_step(metrics, self.steps_done)
@@ -612,13 +599,6 @@ class PokemonTrainer:
     def _log_progress(self, info, reward_data, pbar):
         self.episode_reward += reward_data["total"]
         self.episode_steps += 1
-
-        if self.director.active_goal:
-            g_name = self.director.active_goal.name
-            g_type = self.director.active_goal.goal_type
-        else:
-            g_name = "none"
-            g_type = "none"
 
         brain_metrics = self.agent.get_metrics()
         epsilon = brain_metrics.get("brain/epsilon", 0.0)
@@ -638,14 +618,17 @@ class PokemonTrainer:
                 location_info = "⚔️ Battle"
         else:
             location_info = "🌍 Overworld"
-            
+
+        # Add cursor info if available
+        cursor_display = getattr(self, '_current_cursor_display', '')
+        cursor_info = f" | 📍{cursor_display}" if cursor_display else ""
+
         pbar.set_description(
             f"[{self.brain_type.upper()}|{goal_strat}] "
             f"Rew:{self.episode_reward:.1f} | "
             f"ε:{epsilon:.3f} | "
             f"Badges:{self.current_badges} | "
-            f"{location_info} | "
-            f"{g_type}:{g_name}"
+            f"{location_info}{cursor_info}"
         )
 
     def _handle_episode_end(self, final_reward):
@@ -659,10 +642,6 @@ class PokemonTrainer:
             self.best_reward = self.episode_reward
             self._save_agent("best_reward")
 
-        ckpt = self._get_latest_checkpoint()
-        if ckpt:
-            self.env.load_state(ckpt)
-            return self.env._get_obs(), self.env._get_info()
         return self.env.reset()
 
     def _save_agent(self, tag: str):

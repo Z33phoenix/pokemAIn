@@ -51,7 +51,7 @@ crossq:
   # Exploration
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay: 100000  # Steps to decay over
+  epsilon_decay: 10000  # Steps to decay over
 
   # Experience replay
   buffer_capacity: 50000  # Override with memory preset
