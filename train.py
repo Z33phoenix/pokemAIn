@@ -1,30 +1,48 @@
+# -*- coding: utf-8 -*-
 """
-TRAINING SCRIPT - Pluggable Architecture
+TRAINING SCRIPT - Pluggable Architecture + Human Brain
 
-This training script uses pluggable architectures for:
-1. RL Algorithm (Brain) - CrossQ, BBF, Rainbow, etc.
-2. Goal-Setting Strategy - LLM, Heuristic, or None
-3. Reward Strategy - Goal-Aware, Base, or Hybrid
+This script trains Pokemon agents through a unified training pipeline.
+You can substitute different "brains" - either RL algorithms OR a human player.
+
+Brain Types:
+    - crossq: CrossQ RL algorithm (stable dual Q-networks)
+    - bbf: BBF (coming soon)
+    - rainbow: Rainbow DQN (coming soon)
+    - human: You! Keyboard-controlled player in the training loop
+
+When using --brain human:
+    - You control the game via keyboard
+    - All training infrastructure still runs (rewards, memory, battle logic, etc.)
+    - Perfect for debugging and verifying game integration without waiting for RL
 
 Example usage:
-    # LLM-based training with CrossQ
+
+    # RL Training with LLM-based goal setting
     python train.py --brain crossq --strategy llm
 
-    # Pure reactive RL (no goals, no goal rewards)
+    # Pure reactive RL (no goals)
     python train.py --brain crossq --strategy reactive
 
-    # Heuristic goals with CrossQ
-    python train.py --brain crossq --strategy heuristic
+    # HUMAN PLAYER MODE - Full training pipeline with manual keyboard control
+    python train.py --brain human --strategy reactive
 
-    # Override individual settings
-    python train.py --brain crossq --strategy llm --memory-preset low
+    # RL with custom overrides
+    python train.py --brain crossq --strategy llm --learning-rate 0.0001
 """
 
 import argparse
+import sys
+import io
+
+# Set UTF-8 encoding for Windows console output
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 import os
 import glob
 import random
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Optional
 import numpy as np
 import torch
 import yaml
@@ -37,6 +55,25 @@ from src.env.rewards import RewardSystem
 from src.utils.logger import Logger
 from src.utils.brain_config_loader import BrainConfigLoader
 from src.utils.strategy_config_loader import StrategyConfigLoader, load_strategy_preset
+
+
+BADGE_SEQUENCE = [
+    "Boulder Badge",
+    "Cascade Badge",
+    "Thunder Badge",
+    "Rainbow Badge",
+    "Soul Badge",
+    "Marsh Badge",
+    "Volcano Badge",
+    "Earth Badge",
+]
+
+REGION_BY_GAME = {
+    "pokemon_red": "Kanto",
+    "pokemon_blue": "Kanto",
+    "pokemon_yellow": "Kanto",
+    "pokemon_emerald": "Hoenn",
+}
 
 
 class TrainingConfig:
@@ -113,6 +150,9 @@ class PokemonTrainer:
         self.episode_steps = 0
         self.save_dir = cfg.get("saves_dir", "saves")
         os.makedirs(self.save_dir, exist_ok=True)
+        self._text_embedding_dim = 17
+        self._zero_text_embedding = np.zeros(self._text_embedding_dim, dtype=np.float32)
+        self._current_cursor_embedding = self._zero_text_embedding.copy()
 
     def _seed_everything(self, seed: int | None) -> int:
         if seed is None:
@@ -161,30 +201,38 @@ class PokemonTrainer:
         """Create agent using the brain architecture."""
         agent_cfg = self.cfg.get("agent", {}).copy()
         allowed_actions = agent_cfg.get("allowed_actions", list(range(self.env.action_space.n)))
+        action_names = self.env.get_action_names()
+
+        if isinstance(self.brain_config, dict):
+            self.brain_config["text_feature_dim"] = self._text_embedding_dim
 
         self.agent = create_agent(
             brain_type=self.brain_type,
             brain_config=self.brain_config,
             allowed_actions=allowed_actions,
-            device=str(self.device)
+            device=str(self.device),
+            action_names=action_names
         )
 
-        # Load checkpoint if exists
-        path = os.path.join(self.checkpoint_dir, f"agent_{self.brain_type}_{self.save_tag}.pth")
-        if os.path.exists(path):
-            try:
-                self.agent.load_checkpoint(path)
-                print(f"✓ Loaded {self.brain_type} agent from {path}")
-            except Exception as e:
-                print(f"⚠ Could not load agent weights: {e}")
+        # Load checkpoint if exists (skip for human brain)
+        if self.brain_type.lower() != "human":
+            path = os.path.join(self.checkpoint_dir, f"agent_{self.brain_type}_{self.save_tag}.pth")
+            if os.path.exists(path):
+                try:
+                    self.agent.load_checkpoint(path)
+                    print(f"✓ Loaded {self.brain_type} agent from {path}")
+                except Exception as e:
+                    print(f"⚠ Could not load agent weights: {e}")
 
         print(f"✓ Created {self.brain_type.upper()} agent")
-        print(f"  Memory: {self.brain_config.get('buffer_capacity', 'N/A')} capacity, "
-              f"{self.brain_config.get('batch_size', 'N/A')} batch size")
+        if self.brain_type.lower() != "human":
+            print(f"  Memory: {self.brain_config.get('buffer_capacity', 'N/A')} capacity, "
+                  f"{self.brain_config.get('batch_size', 'N/A')} batch size")
 
     def run(self):
         """Main training loop."""
         obs, info = self._reset_env()
+        self._update_memory(info)
         self._poll_goal_strategy(info, force=True)
 
         pbar = tqdm(total=self.total_steps)
@@ -193,18 +241,17 @@ class PokemonTrainer:
         while self.steps_done < self.total_steps:
             self.steps_done += 1
 
-            # 1. Sense: Read text & update memory
-            self._update_memory(info)
-
             # 2. Think: Poll goal strategy periodically
             if self.steps_done % self.llm_update_freq == 0:
                 self._poll_goal_strategy(info)
 
             # 3. Act: Select & execute action
-            action_data = self._select_action(obs, info)
+            current_cursor_embedding = getattr(self, "_current_cursor_embedding", self._zero_text_embedding)
+            action_data = self._select_action(obs, info, current_cursor_embedding)
             next_obs, _, terminated, truncated, next_info = self.env.step(action_data["env_action"])
 
-            # 4. Learn: Compute rewards using reward strategy
+            # 4. Learn: Compute rewards and train
+            next_cursor_embedding = self._update_memory(next_info)
             reward_data = self._compute_rewards(info, next_info, next_obs, action_data)
 
             # Store experience and train
@@ -213,7 +260,9 @@ class PokemonTrainer:
                 action=action_data["local_action"],
                 reward=reward_data["total"],
                 next_obs=next_obs,
-                done=terminated or truncated
+                done=terminated or truncated,
+                text_embedding=current_cursor_embedding,
+                next_text_embedding=next_cursor_embedding
             )
 
             loss, metrics = self.agent.train_step()
@@ -239,6 +288,7 @@ class PokemonTrainer:
             if terminated or truncated:
                 obs, info = self._handle_episode_end(reward_data["total"])
                 self.goal_step_count = 0
+                self._update_memory(info)
 
             # Checkpoint saving
             if self.steps_done % self.cfg["training"]["save_frequency"] == 0:
@@ -276,10 +326,11 @@ class PokemonTrainer:
         except:
             return None
 
-    def _update_memory(self, info: Dict[str, Any]):
-        """Check for sensory inputs and log them."""
+    def _update_memory(self, info: Dict[str, Any]) -> np.ndarray:
+        """Check for sensory inputs, log them, and update text embeddings."""
         current_map_id = info.get("map_id")
         current_map_name = self.game_data.map_id_to_name(current_map_id)
+        selection = ''
 
         if not hasattr(self, "_last_map"):
             self._last_map = current_map_name
@@ -290,26 +341,25 @@ class PokemonTrainer:
         # Text decoding with cursor-based attention (works for all Pokemon GB games)
         if hasattr(self.env, 'text_decoder'):
             try:
-                # Debug mode disabled after initial diagnosis
-                debug_mode = False
-                
+                # Enable debug mode to see raw tiles and decoded text
+                debug_mode = False  # Set to True for detailed debugging
+
                 decoded_data = self.env.text_decoder.decode(debug=debug_mode)
                 selection = decoded_data.get('selection', '').strip()
                 narrative = decoded_data.get('narrative', '').strip()
-                
-                # Track last seen text to avoid spam
+
+                # Track last seen selection and narrative to avoid duplicate logging
                 last_selection = getattr(self, '_last_selection', '')
                 last_narrative = getattr(self, '_last_narrative', '')
-                
-                # Always try legacy method for comparison
-                legacy_text = self.env.text_decoder.read_current_text()
-                if debug_mode and legacy_text:
-                    print(f"DEBUG: Legacy method found text: '{legacy_text}'")
-                
-                # Only output when text changes (avoid repetitive logging)
+
+                # Selection changes should still be tracked
                 selection_changed = selection and selection != last_selection
+
+                # Only log narrative when it's NEW (changed from last time)
+                # The decoder now handles completion detection, so any narrative here is ready to log
                 narrative_changed = narrative and narrative != last_narrative
-                
+
+                # Only output when selection changes or narrative is NEW
                 if selection_changed or narrative_changed:
                     debug_parts = []
                     if selection_changed:
@@ -320,52 +370,162 @@ class PokemonTrainer:
                         debug_parts.append(f"[TEXT: {narrative}]")
                         self.memory.log_event(self.steps_done, "NARRATIVE_TEXT", narrative)
                         self._last_narrative = narrative
-                    
+
                     # Include current map and step context for better debugging
                     map_context = f"[{current_map_name}]" if current_map_name else "[Unknown Map]"
                     print(f"🎮 AI Reading {map_context} Step {self.steps_done}: {' '.join(debug_parts)}")
-                
-                # Clear cached text when both are empty (dialogue closed)
-                if not selection and not narrative:
+
+                # Clear cached selection when empty (dialogue closed)
+                if not selection:
                     self._last_selection = ''
-                    self._last_narrative = ''
-                elif debug_mode and not (selection_changed or narrative_changed):
-                    print(f"DEBUG: Same text as before at step {self.steps_done} - not logging")
-                    
+
             except Exception as e:
                 if debug_mode:
                     print(f"DEBUG: Text decoder error: {e}")
                 # Don't disrupt training for text errors
+
+        self._current_cursor_embedding = self._vectorize_selection(selection)
+        return self._current_cursor_embedding
+
+    def _infer_region(self) -> str:
+        """Map configured game id to a region label for LLM context."""
+        game_id = (self.cfg.get("game") or "").lower()
+        return REGION_BY_GAME.get(game_id, "Unknown")
+
+    def _derive_screen_mode(self, info: Dict[str, Any]) -> str:
+        """Coarse screen mode classification sent to the LLM."""
+        if info.get("battle_active"):
+            return "BATTLE"
+        if info.get("menu_open"):
+            return "MENU"
+        return "OVERWORLD"
+
+    def _extract_nearby_entities(self, info: Dict[str, Any]) -> list[str]:
+        """Build a compact list of actionable entities/warps near the player."""
+        entries: list[str] = []
+        conns = info.get("map_connections", {}) or {}
+        for direction, details in conns.items():
+            if not details or not details.get("exists"):
+                continue
+            dest_map = details.get("dest_map")
+            dest_name = self.game_data.map_id_to_name(dest_map)
+            entries.append(f"Exit {direction.title()} -> {dest_name}")
+
+        for warp in info.get("map_warps", []) or []:
+            dest_name = self.game_data.map_id_to_name(warp.get("dest_map"))
+            entries.append(f"Warp at ({warp.get('x')},{warp.get('y')}) -> {dest_name}")
+
+        for sprite in info.get("sprites", []) or []:
+            sprite_type = sprite.get("type", "NPC")
+            entries.append(f"{sprite_type} at ({sprite.get('x')},{sprite.get('y')})")
+        return entries
+
+    def _format_memory_log(self, context_log: str) -> list[str]:
+        """Convert memory history into a list while dropping placeholder text."""
+        if not context_log or context_log.strip().lower() == "no recent events.":
+            return []
+        return [line.strip() for line in context_log.splitlines() if line.strip()]
+
+    def _vectorize_selection(self, selection: str) -> np.ndarray:
+        """Convert the current cursor selection into a fixed-length embedding."""
+        selection = selection or ''
+        vec = np.zeros(self._text_embedding_dim, dtype=np.float32)
+        if not selection:
+            return vec
+
+        max_chars = self._text_embedding_dim - 1
+        trimmed = selection.upper()[:max_chars]
+        for idx, char in enumerate(trimmed):
+            ascii_code = max(32, min(126, ord(char)))
+            vec[idx] = (ascii_code - 32) / 94.0  # Normalize printable ASCII range
+        vec[-1] = 1.0  # Presence flag
+        return vec
+
+    def _build_party_knowledge(self, info: Dict[str, Any]) -> list[Dict[str, Any]]:
+        """Summarize party condition with the limited telemetry currently available."""
+        party_size = info.get("party_size") or 0
+        if party_size <= 0:
+            return []
+
+        hp_current = info.get("hp_current", 0)
+        hp_max = max(info.get("hp_max", 1), 1)
+        hp_percent = info.get("hp_percent", 0.0) or 0.0
+        condition = "OK"
+        if hp_percent < 0.25:
+            condition = "CRITICAL"
+        elif hp_percent < 0.5:
+            condition = "HURT"
+
+        party_summary = {
+            "species": "Unknown Lead",
+            "level": None,
+            "condition": condition,
+            "hp": f"{hp_current}/{hp_max}",
+            "notes": f"Party size: {party_size}",
+        }
+        return [party_summary]
+
+    def _build_inventory_knowledge(self, info: Dict[str, Any]) -> Dict[str, Any]:
+        """Summarize key badges and items available to the agent."""
+        badge_count = int(info.get("badges", 0) or 0)
+        badges = BADGE_SEQUENCE[:badge_count]
+        return {
+            "key_items": [],
+            "badges": badges,
+        }
+
+    def _build_llm_payload(
+        self,
+        info: Dict[str, Any],
+        context_log: str,
+        nearby_entities: list[str]
+    ) -> Dict[str, Any]:
+        """Create the structured JSON payload sent to goal LLMs."""
+        location_name = self.game_data.map_id_to_name(info.get("map_id"))
+        payload = {
+            "meta": {
+                "game": getattr(self.game_data, "get_game_name", lambda: self.cfg.get("game", "pokemon_red"))(),
+                "region": self._infer_region(),
+            },
+            "current_state": {
+                "location": {
+                    "name": location_name,
+                    "map_id": info.get("map_id"),
+                    "coordinates": {"x": info.get("x"), "y": info.get("y")},
+                    "nearby_entities": nearby_entities,
+                },
+                "screen_mode": self._derive_screen_mode(info),
+                "hp": {
+                    "current": info.get("hp_current"),
+                    "max": info.get("hp_max"),
+                    "percent": round((info.get("hp_percent") or 0.0) * 100, 1),
+                },
+            },
+            "party_knowledge": self._build_party_knowledge(info),
+            "inventory_knowledge": self._build_inventory_knowledge(info),
+            "memory_log": self._format_memory_log(context_log),
+        }
+
+        active_goal = self.director.active_goal.as_dict() if self.director.active_goal else None
+        last_goal = self.director.get_last_completed_goal()
+        if active_goal or last_goal:
+            payload["goal_context"] = {
+                "active_goal": active_goal,
+                "last_completed_goal": last_goal,
+            }
+        return payload
 
     def _poll_goal_strategy(self, info: Dict[str, Any], force: bool = False):
         """Query the goal strategy for a new goal."""
         # Build state summary
         context_log = self.memory.consume_history()
 
-        valid_moves = []
-        conns = info.get("map_connections", {})
-        for direction, details in conns.items():
-            if details.get("exists"):
-                valid_moves.append(f"Exit {direction.title()}")
-
-        warps = info.get("map_warps", [])
-        for w in warps:
-            valid_moves.append(f"Warp at ({w['x']},{w['y']})")
-
-        sprites = info.get("sprites", [])
-        for s in sprites:
-            valid_moves.append(f"{s['type']} at ({s['x']},{s['y']})")
-
-        nearby_entities_str = "; ".join(valid_moves) if valid_moves else "None visible"
+        nearby_entities = self._extract_nearby_entities(info)
 
         state_summary = {
-            "history": context_log,
-            "current_location": self.game_data.map_id_to_name(info.get("map_id")),
-            "nearby_entities": nearby_entities_str,
-            "party_size": info.get("party_size"),
-            "badges": info.get("badges"),
+            "llm_payload": self._build_llm_payload(info, context_log, nearby_entities),
+            "current_info": info,  # For goal vector calculation
             "last_goal": self.director.active_goal.as_dict() if self.director.active_goal else None,
-            "current_info": info  # For goal vector calculation
         }
 
         # Poll the strategy
@@ -376,7 +536,12 @@ class PokemonTrainer:
             self.director.enqueue_goal(new_goal, self.steps_done)
             self.goal_step_count = 0
 
-    def _select_action(self, obs: np.ndarray, info: Dict[str, Any]) -> Dict[str, Any]:
+    def _select_action(
+        self,
+        obs: np.ndarray,
+        info: Dict[str, Any],
+        text_embedding: Optional[np.ndarray] = None
+    ) -> Dict[str, Any]:
         """Select action using agent."""
         # Get goal context from director
         _, _, _, goal_ctx = self.director.select_specialist(
@@ -389,7 +554,8 @@ class PokemonTrainer:
         env_action, local_action, features = self.agent.get_action_with_features(
             obs,
             deterministic=False,
-            goal=goal_ctx
+            goal=goal_ctx,
+            text_embedding=text_embedding
         )
 
         return {
@@ -480,6 +646,8 @@ class PokemonTrainer:
     def _cleanup(self):
         self._save_agent(self.save_tag)
         self.logger.close()
+        if hasattr(self, "director"):
+            self.director.shutdown()
         self.env.close()
 
 
@@ -499,13 +667,18 @@ def train(
     **brain_overrides
 ):
     """
-    Train Pokemon agent with fully pluggable architecture.
+    Train Pokemon agent through unified training pipeline.
 
     Args:
-        brain_type: "crossq", "bbf", or "rainbow"
+        brain_type: "crossq", "bbf", "rainbow", or "human" (keyboard control)
         strategy_preset: "llm", "heuristic", "reactive", or "hybrid"
         memory_preset: "minimal", "low", "medium", or "high"
         brain_overrides: Additional brain config overrides
+
+    When brain_type="human":
+        - You control the game via keyboard
+        - All training infrastructure runs normally (rewards, memory, etc.)
+        - Perfect for debugging game integration
     """
     # Load base config
     cfg = TrainingConfig.load(config_path)
@@ -514,19 +687,20 @@ def train(
     # Apply strategy preset
     cfg = load_strategy_preset(strategy_preset, cfg)
 
-    # Load brain config
-    brain_loader = BrainConfigLoader()
-    brain_config = brain_loader.get_brain_config(brain_type, memory_preset, brain_overrides)
-
-    # Print configuration
-    vram_estimate = brain_loader.estimate_vram_usage(brain_config)
-    print(f"\n{'='*60}")
-    print(f"REFACTORED TRAINING - Pluggable Architecture")
-    print(f"{'='*60}")
-    print(f"Brain: {brain_type.upper()} | Memory: {memory_preset.upper()}")
-    print(f"Strategy: {strategy_preset.upper()}")
-    print(f"Estimated VRAM: {vram_estimate['total_mb']:.0f} MB")
-    print(f"{'='*60}\n")
+    # Load brain config (skip for human brain)
+    if brain_type.lower() == "human":
+        brain_config = {}  # No config needed for human
+    else:
+        brain_loader = BrainConfigLoader()
+        brain_config = brain_loader.get_brain_config(brain_type, memory_preset, brain_overrides)
+        vram_estimate = brain_loader.estimate_vram_usage(brain_config)
+        print(f"\n{'='*70}")
+        print(f"RL TRAINING - Pluggable Architecture")
+        print(f"{'='*70}")
+        print(f"Brain: {brain_type.upper()} | Memory: {memory_preset.upper()}")
+        print(f"Strategy: {strategy_preset.upper()}")
+        print(f"Estimated VRAM: {vram_estimate['total_mb']:.0f} MB")
+        print(f"{'='*70}\n")
 
     device = device_override or ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -536,7 +710,7 @@ def train(
     )
     trainer.setup()
     trainer.run()
-    return {"done": True}
+    return {"done": True, "brain": brain_type}
 
 
 if __name__ == "__main__":
@@ -547,8 +721,8 @@ if __name__ == "__main__":
     # Main args
     parser.add_argument("--config", type=str, help="Path to hyperparameters.yaml")
     parser.add_argument("--brain", type=str, default="crossq",
-                        choices=["crossq", "bbf", "rainbow"],
-                        help="RL algorithm")
+                        choices=["crossq", "bbf", "rainbow", "human"],
+                        help="RL algorithm or 'human' for manual keyboard control")
     parser.add_argument("--strategy", type=str, default="llm",
                         choices=["llm", "heuristic", "reactive", "hybrid"],
                         help="Goal-setting strategy preset")

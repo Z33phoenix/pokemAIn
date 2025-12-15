@@ -39,26 +39,62 @@ training:
 # Rewards
 # =============================================================================
 rewards:
-  # --- Global ---
-  step_penalty: -0.01
-  reward_clip: 10.0
-  catch_pokemon: 5.0
-  level_up: 10.0
-  heal_success: 3.0
-  heal_target: 0.9
+  # --- Global progression ---
+  step_penalty: -0.001          # Increased slightly to pressure speed
+  reward_clip: 10.0            # Lower cap to prevent explosions
+  catch_pokemon: 15.0          # Buffed to make it worth more than walking
+  level_up: 15.0
+  heal_success: 5.0
+  heal_target: 0.85
+  level_reward_scale: 1.0
 
-  # --- Navigation shaping ---
-  new_tile: 0.2
-  new_map: 2.0
-  nav_new_connection: 3.0   # Bonus for first traversal of a unique map-to-map edge (warp or boundary)
-  nav_connection_edge: 0.5     # Bonus for reaching an edge that connects to another map
-  nav_connection_discovery: 0.5  # Bonus once per map for having connection data available
-  nav_warp: 1.0                # Bonus for stepping onto a warp tile (door/stair transition)
-  nav_warp_proximity: 0.05     # Small shaping toward known warp tiles (scaled by Manhattan distance)
-  wall_bump: -0.2
-  stale_penalty: -0.3
-  stale_threshold: 120
-  direction_follow_bonus: 0.5  # Scales reward for moving along goal_vector direction (dot product)
+  # --- Exploration / Navigation ---
+  new_tile: 0.5                # Increased: Exploration > Existing
+  new_map: 5.0
+  nav_new_connection: 6.0
+  nav_connection_edge: 1.0
+  nav_warp: 2.5
+  
+  # CRITICAL FIXES:
+  wall_bump: -0.2              # Punishment
+  stale_penalty: -0.5
+  stale_threshold: 100
+  
+  # direction_follow_bonus: 0.75  <-- DELETE THIS or Change to 0.0
+  # Instead, only reward reaching the specific target tile:
+  goal_bonus:
+    explore:
+      map_match: 6.0
+      coordinate_match: 10.0   # Big payout for ARRIVING, not for moving
+
+    train:
+      battle_complete: 12.0    # Reward for completing training battles
+
+    survive:
+      hp_recovered: 3.0        # Reward for healing after battles
+
+    menu:
+      menu_reached: 2.0        # Reward for reaching target menu
+      cursor_match: 1.0        # Reward for cursor on target
+
+  # --- Battle shaping ---
+  battle_tick: -0.001           # NEGATIVE. Battles cost energy/time. Win fast!
+  battle_damage: 2.5           # Lowered slightly to prioritize the Win
+  battle_damage_taken: -0.5    # Agent hates pain
+  battle_win: 20.0             # Must be the dominant source of reward
+  battle_loss: -10.0
+
+  # --- Menu handling ---
+  menu:
+    opened_menu: -0.1          # Opening menu costs small amount (prevents spam)
+    cursor_move: -0.001         # Moving cursor costs small amount (efficiency)
+    cursor_on_target: 0.0      # Don't reward hovering
+    correct_target: 5.0        # Reward only the SELECTION
+    inactive_penalty: -0.1
+    close_penalty: 0.0
+
+  # --- Repetitive action penalties ---
+  switch_active_pokemon_penalty: -2.5  # Penalty for trying to switch to active Pokemon (escalates with repetition)
 
 # =============================================================================
 # Director
@@ -81,11 +117,11 @@ agent:
   allowed_actions: [0, 1, 2, 3, 4, 5]  # Arrows, A, B
 
 goal_llm:
-  enabled: False
+  enabled: True
   api_url: http://localhost:11434/api/chat
-  model: pokemon-goal
+  model: poke-llm
   timeout: 50.0
-  debug: False
+  debug: True
 
 # =============================================================================
 # Strategy Configuration (NEW - Pluggable Architecture)
@@ -110,4 +146,4 @@ saves_dir: saves
 # =============================================================================
 # Debug
 # =============================================================================
-debug: True
+debug: False

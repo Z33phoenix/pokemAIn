@@ -41,6 +41,9 @@ class RewardSystem:
         self.last_menu_open = False
         self.map_graph: dict[int, set[int]] = {}
         self.discovered_edges: set[frozenset[int]] = set()
+        self.max_level_reward = 0.0
+        self.consecutive_already_out = 0
+        self.last_narrative = ""
 
     def set_memory_interface(self, memory_interface: MemoryInterface):
         """Set the memory interface for this reward system."""
@@ -65,6 +68,9 @@ class RewardSystem:
         self.menu_steps_stagnant = 0
         self.last_menu_open = False
         self._reset_graph()
+        self.max_level_reward = 0.0
+        self.consecutive_already_out = 0
+        self.last_narrative = ""
 
     def compute_components(
         self,
@@ -259,10 +265,35 @@ class RewardSystem:
             rewards["global_reward"] += cfg.get("heal_success", 0.0)
         self.last_hp_fraction = hp_percent
 
+        rewards["global_reward"] += self._compute_level_reward_bonus()
+
         rewards["menu_reward"] = self.compute_menu_reward(info, goal_ctx)
         rewards["goal_bonus"] = self.compute_goal_bonus(
             info, goal_ctx, prev_hp_fraction=prev_hp_fraction, was_in_battle_prev=was_in_battle_prev
         )
+
+        # Penalty for repeatedly trying to switch to active Pokemon
+        current_narrative = info.get("text_narrative", "")
+        if current_narrative and "already out" in current_narrative.lower():
+            # This message appears when trying to switch to the active Pokemon
+            if current_narrative == self.last_narrative:
+                # Same message as before - increment counter
+                self.consecutive_already_out += 1
+            else:
+                # New instance of the message
+                self.consecutive_already_out = 1
+
+            # Apply escalating penalty based on repetitions
+            base_penalty = cfg.get("switch_active_pokemon_penalty", -0.1)
+            # Scale penalty with consecutive attempts (gets worse with repetition)
+            penalty_multiplier = min(self.consecutive_already_out, 5)  # Cap at 5x
+            rewards["menu_reward"] += base_penalty * penalty_multiplier
+        else:
+            # Reset counter if we're not seeing the "already out" message
+            if self.last_narrative and "already out" in self.last_narrative.lower():
+                self.consecutive_already_out = 0
+
+        self.last_narrative = current_narrative
 
         clip_value = cfg.get("reward_clip", np.inf)
         for key, value in rewards.items():
@@ -409,6 +440,30 @@ class RewardSystem:
             if desired_cursor is not None and cursor is not None and tuple(cursor) == tuple(desired_cursor):
                 bonus += menu_cfg.get("cursor_match", 0.0)
         return float(bonus)
+
+    def _compute_level_reward_bonus(self) -> float:
+        """Apply the PokerL-style level reward based on total party levels."""
+        scale = self.config.get("level_reward_scale", 0.0)
+        if scale == 0.0 or self._memory_interface is None:
+            return 0.0
+
+        party_levels = self._memory_interface.get_party_levels()
+        if not party_levels:
+            return 0.0
+
+        level_sum = max(sum(party_levels) - 4, 0)  # subtract starting Squirtle level like PokerL
+        explore_thresh = 22
+        if level_sum < explore_thresh:
+            reward = level_sum
+        else:
+            reward = (level_sum - explore_thresh) / 4.0 + explore_thresh
+
+        if reward <= self.max_level_reward:
+            return 0.0
+
+        delta = reward - self.max_level_reward
+        self.max_level_reward = reward
+        return scale * delta
 
     def _reset_graph(self):
         """Clear the tracked overworld graph of maps and their traversed edges."""

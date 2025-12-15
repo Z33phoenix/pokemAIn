@@ -84,6 +84,10 @@ class PokemonGBMemory(MemoryInterface):
         hp_current, hp_max = self.get_player_hp()
         return (hp_current / hp_max) if hp_max > 0 else 0.0
 
+    def get_party_levels(self) -> List[int]:
+        """Get levels for each Pokemon currently in the party."""
+        return ram_map.read_party_levels(self.memory)
+
 
 class PokemonGBGym(GameEnvironment):
     """
@@ -127,7 +131,9 @@ class PokemonGBGym(GameEnvironment):
         self.action_repeat = int(config.get("action_repeat", 24))
         self.release_frame = int(config.get("release_frame", 8))
         self.max_steps = int(config.get("max_steps", 2048))
+        # NOOP is action 0 (do nothing), then the actual button presses
         self.valid_actions = [
+            None,  # NOOP - no action
             WindowEvent.PRESS_ARROW_DOWN,
             WindowEvent.PRESS_ARROW_LEFT,
             WindowEvent.PRESS_ARROW_RIGHT,
@@ -138,6 +144,7 @@ class PokemonGBGym(GameEnvironment):
             WindowEvent.PRESS_BUTTON_SELECT,
         ]
         self.release_actions = [
+            None,  # NOOP - no release needed
             WindowEvent.RELEASE_ARROW_DOWN,
             WindowEvent.RELEASE_ARROW_LEFT,
             WindowEvent.RELEASE_ARROW_RIGHT,
@@ -212,10 +219,15 @@ class PokemonGBGym(GameEnvironment):
         if self.window_closed:
             raise RuntimeError("PyBoy window has been closed by the user.")
 
-        self.pyboy.send_input(self.valid_actions[action])
+        # Send the action (None for NOOP, which does nothing)
+        if self.valid_actions[action] is not None:
+            self.pyboy.send_input(self.valid_actions[action])
+
         for i in range(self.action_repeat):
             if i == self.release_frame:
-                self.pyboy.send_input(self.release_actions[action])
+                # Send release event (None for NOOP, which does nothing)
+                if self.release_actions[action] is not None:
+                    self.pyboy.send_input(self.release_actions[action])
             if not self.pyboy.tick():
                 self.window_closed = True
                 info = {"window_closed": True}
@@ -265,11 +277,11 @@ class PokemonGBGym(GameEnvironment):
         hp_current, hp_max = ram_map.read_player_hp(self.memory)
         enemy_hp_current, enemy_hp_max = ram_map.read_enemy_hp(self.memory)
         battle_active = ram_map.is_battle_active(self.memory)
-        
+
         # 2. Navigation "Senses" (Needed for LLM & Director)
         current_map_id = ram_map.read_map_id(self.memory)
         pos_x, pos_y = ram_map.read_player_position(self.memory)
-        
+
         # Optimization: Only read heavy map data if exploring
         if not battle_active:
             map_connections = ram_map.read_map_connections(self.memory)
@@ -279,6 +291,16 @@ class PokemonGBGym(GameEnvironment):
             sprites = ram_map.read_sprites(self.memory)
         else:
             map_connections, map_warps, sprites = {}, [], []
+
+        # 3. Text Decoding (for reward penalties and context)
+        # Read current screen text to detect repetitive actions
+        text_data = {"selection": "", "narrative": ""}
+        try:
+            # Decode text without debug output (performance optimization)
+            text_data = self.text_decoder.decode(debug=False)
+        except Exception:
+            # Don't disrupt info gathering if text decoding fails
+            pass
 
         return {
             # --- State for LLM & Director ---
@@ -290,7 +312,7 @@ class PokemonGBGym(GameEnvironment):
             "map_connections": map_connections,
             "map_warps": map_warps,
             "sprites": sprites,
-            
+
             # --- State for Reward System ---
             "battle_active": battle_active,
             "menu_open": ram_map.is_menu_open(self.memory),
@@ -302,6 +324,10 @@ class PokemonGBGym(GameEnvironment):
             "enemy_hp_percent": (enemy_hp_current / enemy_hp_max) if enemy_hp_max > 0 else 0.0,
             # Simple Party Power heuristic
             "party_power": (hp_current / hp_max) if hp_max > 0 else 0.0,
+
+            # --- Text Data (for detecting repetitive actions) ---
+            "text_selection": text_data.get("selection", ""),
+            "text_narrative": text_data.get("narrative", ""),
         }
 
     def close(self):
@@ -382,6 +408,7 @@ class PokemonGBGym(GameEnvironment):
     def get_action_names(self) -> List[str]:
         """Get human-readable action names."""
         return [
+            "NOOP",
             "DOWN",
             "LEFT",
             "RIGHT",
