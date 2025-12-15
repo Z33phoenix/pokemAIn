@@ -16,6 +16,7 @@ PARTY_SIZE = 0xD163  # 1 byte
 X_POS = 0xD362  # 1 byte
 Y_POS = 0xD361  # 1 byte
 MAP_N = 0xD35E  # 1 byte (map identifier)
+PARTY_LEVEL_ADDRESSES = [0xD18C, 0xD1B8, 0xD1E4, 0xD210, 0xD23C, 0xD268]
 
 # -----------------------------------------------------------------------------#
 # Battle / Status Offsets
@@ -124,6 +125,13 @@ def read_first_mon_exp(memory) -> int:
         | (memory[EXP_FIRST_MON + 1] << 8)
         | memory[EXP_FIRST_MON + 2]
     )
+
+def read_party_levels(memory) -> List[int]:
+    size = read_party_size(memory)
+    levels = []
+    for idx in range(min(size, len(PARTY_LEVEL_ADDRESSES))):
+        levels.append(int(memory[PARTY_LEVEL_ADDRESSES[idx]]))
+    return levels
 
 # --- Map & Connections ---
 

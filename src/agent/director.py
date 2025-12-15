@@ -24,6 +24,8 @@ Usage:
 """
 
 from typing import Any, Dict, List, Optional, Tuple
+from concurrent.futures import Future, ThreadPoolExecutor
+from copy import deepcopy
 import torch
 
 from src.agent.graph_memory import GraphMemory
@@ -35,15 +37,23 @@ class EpisodicMemory:
 
     def __init__(self):
         self.events = []
+        self._seen_narratives = set()  # Track unique narrative texts to avoid duplicates
 
     def log_event(self, step: int, event_type: str, detail: str):
         """Log a significant event (Map change, Battle, Item)."""
+        # For NARRATIVE_TEXT, check if we've seen this exact text before (anywhere in history)
+        # This prevents duplicate logs when AI talks to the same NPC multiple times
+        if event_type == "NARRATIVE_TEXT":
+            if detail in self._seen_narratives:
+                return  # Skip duplicate narrative
+            self._seen_narratives.add(detail)
+
         entry = f"[{step}] {event_type}: {detail}"
         # Avoid duplicate consecutive logs
         if self.events and self.events[-1] == entry:
             return
         self.events.append(entry)
-        print("Memory Log:", self.events)
+        #print("Memory Log:", self.events)
 
     def consume_history(self) -> str:
         """
@@ -55,6 +65,7 @@ class EpisodicMemory:
 
         history_str = "\n".join(reversed(self.events))
         self.events.clear()
+        self._seen_narratives.clear()  # Reset seen narratives for new context window
         return history_str
 
 
@@ -96,6 +107,10 @@ class Director:
 
         # Tracking
         self.prev_battle_active = False
+        self.max_goal_capacity = config.get("max_goal_capacity", 3)
+        self.poll_goal_threshold = config.get("goal_poll_threshold", 2)
+        self._goal_executor = ThreadPoolExecutor(max_workers=1)
+        self._goal_request_future: Optional[Future] = None
 
     def encode_features(self, obs: torch.Tensor) -> torch.Tensor:
         """Flatten normalized observation tensor into a feature vector."""
@@ -142,20 +157,68 @@ class Director:
 
     def poll_for_goal(self, state_summary: Dict[str, Any], step: int, update_frequency: int) -> Optional[Goal]:
         """
-        Check if a new goal should be generated and return it.
-
-        Args:
-            state_summary: Current game state
-            step: Current training step
-            update_frequency: How often to poll for goals
-
-        Returns:
-            New Goal if one was generated, None otherwise
+        Asynchronously poll the goal strategy for a new goal when capacity permits.
         """
+        ready_goal = self._harvest_async_goal()
+        if ready_goal:
+            return ready_goal
+
+        if not self.goal_strategy.enabled():
+            return None
+
+        if self._request_in_flight() or self._goal_executor is None:
+            return None
+
+        total_goals = self._current_goal_count()
+        if total_goals >= self.max_goal_capacity:
+            return None
+        if total_goals >= self.poll_goal_threshold:
+            return None
+
         if not self.goal_strategy.should_generate_goal(step, update_frequency):
             return None
 
-        return self.goal_strategy.generate_goal(state_summary, self)
+        summary_copy = deepcopy(state_summary)
+        self._goal_request_future = self._goal_executor.submit(
+            self.goal_strategy.generate_goal,
+            summary_copy,
+            self
+        )
+        return None
+
+    def _current_goal_count(self) -> int:
+        """Compute total goals including the active one."""
+        return (1 if self.active_goal else 0) + len(self.goal_queue)
+
+    def _request_in_flight(self) -> bool:
+        return self._goal_request_future is not None and not self._goal_request_future.done()
+
+    def _harvest_async_goal(self) -> Optional[Goal]:
+        """Check if an async goal request finished and return the result."""
+        if self._goal_request_future is None:
+            return None
+
+        if not self._goal_request_future.done():
+            return None
+
+        try:
+            goal = self._goal_request_future.result()
+        except Exception as exc:
+            print(f"[Director] Goal request failed: {exc}")
+            goal = None
+        finally:
+            self._goal_request_future = None
+
+        if goal and self._current_goal_count() < self.max_goal_capacity:
+            return goal
+        return None
+
+    def shutdown(self):
+        """Cleanup executor resources."""
+        if self._goal_executor:
+            self._goal_executor.shutdown(wait=False)
+            self._goal_executor = None
+        self._goal_request_future = None
 
     def enqueue_goal(self, goal: Goal, current_step: int = 0):
         """Add a goal to the queue, sorted by priority."""

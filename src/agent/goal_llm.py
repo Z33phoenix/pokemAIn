@@ -101,14 +101,29 @@ class PokemonGoalLLM:
 
         # Ensure we never send bare integers without context for the map name.
         state_summary = state_summary.copy()
-        location = state_summary.get("location", {}) or {}
-        if location.get("map_name") is None and "map_id" in location:
-            # Use game data provider if available, otherwise fallback to default name
+        current_state = dict(state_summary.get("current_state", {}) or {})
+        location_raw = current_state.get("location", {}) or {}
+        if isinstance(location_raw, dict):
+            location = dict(location_raw)
+        elif isinstance(location_raw, str):
+            location = {"name": location_raw, "map_name": location_raw}
+        else:
+            location = {}
+
+        needs_map_name = location.get("name") is None and location.get("map_name") is None
+        if (needs_map_name or not location.get("name")) and "map_id" in location:
             if self.game_data_provider:
-                location["map_name"] = self.game_data_provider.map_id_to_name(location["map_id"])
+                resolved_name = self.game_data_provider.map_id_to_name(location["map_id"])
             else:
-                location["map_name"] = f"Map {location['map_id']}"
-            state_summary["location"] = location
+                resolved_name = f"Map {location['map_id']}"
+            location["name"] = location.get("name") or resolved_name
+            location["map_name"] = location.get("map_name") or resolved_name
+
+        if location and not location.get("map_name") and location.get("name"):
+            location["map_name"] = location["name"]
+
+        current_state["location"] = location
+        state_summary["current_state"] = current_state
 
         payload = {
             "model": self.model,

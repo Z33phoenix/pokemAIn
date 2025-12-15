@@ -43,6 +43,7 @@ class CrossQBrain(RLBrain):
         use_encoder = config.get("use_encoder", True)
         feature_dim = int(config.get("feature_dim", 512))
         input_dim = int(config.get("input_dim", 9216))  # 96x96 pixels
+        self.text_feature_dim = int(config.get("text_feature_dim", 0))
 
         self.encoder = NatureCNN(
             input_channels=1, 
@@ -50,7 +51,10 @@ class CrossQBrain(RLBrain):
             input_width=240, 
             features_dim=feature_dim
         ) if use_encoder else None
-        fc_input_dim = feature_dim if self.encoder is not None else input_dim
+        if self.encoder is not None:
+            fc_input_dim = feature_dim + self.text_feature_dim
+        else:
+            fc_input_dim = input_dim + self.text_feature_dim
 
         self.q_net = nn.Sequential(
             nn.Linear(fc_input_dim, 256),

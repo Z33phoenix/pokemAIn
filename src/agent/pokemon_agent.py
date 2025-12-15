@@ -56,7 +56,11 @@ class PokemonAgent:
         self.normalize_obs = True
         self.obs_dtype = torch.float32
 
-    def encode_obs(self, obs: np.ndarray | torch.Tensor) -> torch.Tensor:
+    def encode_obs(
+        self,
+        obs: np.ndarray | torch.Tensor,
+        text_embedding: Optional[np.ndarray | torch.Tensor] = None
+    ) -> torch.Tensor:
         """
         Preprocess raw observation into encoded features.
 
@@ -81,13 +85,44 @@ class PokemonAgent:
             obs = obs / 255.0
 
         # Delegate encoding to brain
-        return self.brain.encode_obs(obs)
+        features = self.brain.encode_obs(obs)
+        if features.requires_grad:
+            features = features.detach()
+
+        if text_embedding is None or features.dim() != 2:
+            return features
+
+        text_tensor = self._prepare_text_tensor(text_embedding, features.size(0), features.device, features.dtype)
+        return torch.cat([features, text_tensor], dim=1)
+
+    def _prepare_text_tensor(
+        self,
+        text_embedding: np.ndarray | torch.Tensor,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype
+    ) -> torch.Tensor:
+        """
+        Convert a text embedding into a tensor aligned with feature batches.
+        """
+        if isinstance(text_embedding, torch.Tensor):
+            text_tensor = text_embedding.to(device=device, dtype=dtype)
+        else:
+            text_tensor = torch.as_tensor(text_embedding, dtype=dtype, device=device)
+
+        if text_tensor.dim() == 1:
+            text_tensor = text_tensor.unsqueeze(0)
+
+        if text_tensor.size(0) != batch_size:
+            text_tensor = text_tensor.expand(batch_size, -1)
+        return text_tensor
 
     def get_action(
         self,
         obs: np.ndarray | torch.Tensor,
         deterministic: bool = False,
-        goal: Optional[Dict[str, Any]] = None
+        goal: Optional[Dict[str, Any]] = None,
+        text_embedding: Optional[np.ndarray | torch.Tensor] = None
     ) -> int:
         """
         Select an action given the current observation.
@@ -101,7 +136,7 @@ class PokemonAgent:
             Environment action index (mapped to allowed actions)
         """
         # Encode observation
-        features = self.encode_obs(obs)
+        features = self.encode_obs(obs, text_embedding=text_embedding)
 
         # Get action from brain (local action space)
         local_action = self.brain.get_action(features, deterministic, goal)
@@ -115,7 +150,8 @@ class PokemonAgent:
         self,
         obs: np.ndarray | torch.Tensor,
         deterministic: bool = False,
-        goal: Optional[Dict[str, Any]] = None
+        goal: Optional[Dict[str, Any]] = None,
+        text_embedding: Optional[np.ndarray | torch.Tensor] = None
     ) -> Tuple[int, int, torch.Tensor]:
         """
         Like get_action, but also returns features and local action.
@@ -126,7 +162,7 @@ class PokemonAgent:
         Returns:
             (env_action, local_action, features)
         """
-        features = self.encode_obs(obs)
+        features = self.encode_obs(obs, text_embedding=text_embedding)
         local_action = self.brain.get_action(features, deterministic, goal)
         env_action = self.allowed_actions[local_action]
 
@@ -139,6 +175,8 @@ class PokemonAgent:
         reward: float,
         next_obs: np.ndarray | torch.Tensor,
         done: bool,
+        text_embedding: Optional[np.ndarray | torch.Tensor] = None,
+        next_text_embedding: Optional[np.ndarray | torch.Tensor] = None,
         **kwargs
     ) -> None:
         """
@@ -153,8 +191,8 @@ class PokemonAgent:
             **kwargs: Additional metadata
         """
         # Encode observations
-        state = self.encode_obs(obs)
-        next_state = self.encode_obs(next_obs)
+        state = self.encode_obs(obs, text_embedding=text_embedding)
+        next_state = self.encode_obs(next_obs, text_embedding=next_text_embedding)
 
         # Store in brain
         self.brain.store_experience(state, action, reward, next_state, done, **kwargs)
@@ -193,22 +231,25 @@ def create_agent(
     brain_type: str,
     brain_config: Dict[str, Any],
     allowed_actions: Optional[list] = None,
-    device: str = "cuda"
+    device: str = "cuda",
+    action_names: Optional[list] = None
 ) -> PokemonAgent:
     """
     Factory function to create agents with different brains.
 
     Args:
-        brain_type: Name of brain type ("crossq", "bbf", "rainbow")
+        brain_type: Name of brain type ("crossq", "bbf", "rainbow", "human")
         brain_config: Configuration dict for the brain
         allowed_actions: List of allowed action indices (default: all 8 buttons)
         device: Device to run on
+        action_names: List of action names (required for "human" brain)
 
     Returns:
         PokemonAgent with the specified brain
 
     Example:
         agent = create_agent("crossq", config, device="cuda")
+        agent = create_agent("human", {}, action_names=["DOWN", "LEFT", ...])
     """
     brain_config = brain_config.copy()  # Don't mutate the original config
     brain_config["device"] = device
@@ -223,6 +264,10 @@ def create_agent(
     if brain_type.lower() == "crossq":
         from src.agent.crossq_brain import CrossQBrain
         brain = CrossQBrain(brain_config)
+    elif brain_type.lower() == "human":
+        from src.agent.human_brain import HumanBrain
+        brain_config["action_names"] = action_names or []
+        brain = HumanBrain(brain_config)
     elif brain_type.lower() == "bbf":
         # Placeholder for future BBF implementation
         raise NotImplementedError("BBF brain not yet implemented")

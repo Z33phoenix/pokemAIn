@@ -130,7 +130,8 @@ class LLMGoalStrategy(GoalStrategy):
         if not self.enabled():
             return None
 
-        goal_json = self.llm.generate_goal(state_summary)
+        llm_payload = state_summary.get("llm_payload", state_summary)
+        goal_json = self.llm.generate_goal(llm_payload)
 
         if not goal_json or goal_json.get("goal_type") not in self.allowed_goal_types:
             return None

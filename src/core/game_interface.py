@@ -138,6 +138,11 @@ class MemoryInterface(ABC):
         """Get normalized party strength (0.0-1.0)."""
         pass
 
+    @abstractmethod
+    def get_party_levels(self) -> List[int]:
+        """Get list of current party Pokemon levels."""
+        pass
+
 
 class GameEnvironment(ABC, gym.Env):
     """
