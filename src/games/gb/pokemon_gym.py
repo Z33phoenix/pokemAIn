@@ -298,6 +298,8 @@ class PokemonGBGym(GameEnvironment):
         hp_current, hp_max = ram_map.read_player_hp(self.memory)
         enemy_hp_current, enemy_hp_max = ram_map.read_enemy_hp(self.memory)
         battle_active = ram_map.is_battle_active(self.memory)
+        
+        # Battle info is now shown in progress bar
 
         # 2. Navigation "Senses" (Needed for LLM & Director)
         current_map_id = ram_map.read_map_id(self.memory)

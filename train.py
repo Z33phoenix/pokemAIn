@@ -577,6 +577,18 @@ class PokemonTrainer:
         reward_data = self.reward_strategy.compute_rewards(
             info, next_info, next_obs, action_data, self.director
         )
+        
+        # DEBUG: Track massive reward drops after battle
+        prev_battle = info.get("battle_active", False)
+        curr_battle = next_info.get("battle_active", False)
+        total_reward = reward_data["total"]
+        
+        if prev_battle and not curr_battle and total_reward < -100:  # Just exited battle with huge penalty
+            print(f"🔥 POST-BATTLE MASSIVE PENALTY: {total_reward:.1f}")
+            print(f"   Reward breakdown from reward_strategy:")
+            for key, value in reward_data.items():
+                if abs(value) > 1.0:
+                    print(f"     {key}: {value:.1f}")
 
         # Badge checkpoint saving
         new_badges = next_info.get("badges", 0)
@@ -614,11 +626,25 @@ class PokemonTrainer:
         strategy_info = self.strategy_loader.get_strategy_info()
         goal_strat = strategy_info["goal_strategy"][:3].upper()  # LLM, HEU, NON
 
+        # Add battle/enemy health info
+        battle_active = info.get("battle_active", False)
+        if battle_active:
+            enemy_hp_current = info.get("enemy_hp_current", 0)
+            enemy_hp_max = info.get("enemy_hp_max", 1)
+            if enemy_hp_max > 0:
+                enemy_hp_percent = (enemy_hp_current / enemy_hp_max) * 100
+                location_info = f"⚔️ Enemy:{enemy_hp_current}/{enemy_hp_max}({enemy_hp_percent:.0f}%)"
+            else:
+                location_info = "⚔️ Battle"
+        else:
+            location_info = "🌍 Overworld"
+            
         pbar.set_description(
             f"[{self.brain_type.upper()}|{goal_strat}] "
             f"Rew:{self.episode_reward:.1f} | "
             f"ε:{epsilon:.3f} | "
             f"Badges:{self.current_badges} | "
+            f"{location_info} | "
             f"{g_type}:{g_name}"
         )
 

@@ -80,6 +80,11 @@ class CrossQBrain(RLBrain):
         self.epsilon_decay = config.get("epsilon_decay", 100000)
         self.epsilon_start = self.epsilon
         self.steps_done = 0
+        
+        # Exploration improvements for sparse rewards
+        self.action_counts = np.zeros(self.action_dim)  # Track action frequency
+        self.state_visit_counts = {}  # Track state visitation for novelty
+        self.exploration_bonus_decay = 0.99  # Decay rate for exploration bonuses
 
         # Training settings
         self.batch_size = config.get("batch_size", 32)
@@ -92,12 +97,14 @@ class CrossQBrain(RLBrain):
         self.optimizer = optim.AdamW(params, lr=config.get("learning_rate", 1e-4))
         self.loss_fn = nn.MSELoss()
 
-        # Replay buffer
+        # Enhanced replay buffer with prioritization
         buffer_capacity = config.get("buffer_capacity", 50000)
+        prioritization_alpha = config.get("prioritization_alpha", 0.6)
         self.replay_buffer = ReplayBuffer(
             capacity=buffer_capacity,
             feature_dim=fc_input_dim,
-            device="cpu"  # Store on CPU to save VRAM
+            device="cpu",  # Store on CPU to save VRAM
+            alpha=prioritization_alpha
         )
 
     def encode_obs(self, obs: torch.Tensor) -> torch.Tensor:
@@ -141,17 +148,28 @@ class CrossQBrain(RLBrain):
             elif goal_type and goal_type != "explore":
                 epsilon = min(epsilon, 0.2)
 
-        # Exploration
+        # Enhanced exploration for sparse rewards
         if np.random.random() < epsilon:
-            return np.random.randint(0, self.action_dim)
+            # Count-based exploration: prefer less-tried actions
+            action_probs = 1.0 / (self.action_counts + 1)
+            action_probs /= action_probs.sum()
+            action = np.random.choice(self.action_dim, p=action_probs)
+            self.action_counts[action] += 1
+            return action
 
-        # Exploitation
+        # Exploitation with exploration bonus
         self.set_train_mode(False)
         with torch.no_grad():
             q_values = self.q_net(state.to(self.device))
-            action = torch.argmax(q_values, dim=1).item()
+            
+            # Add small exploration bonus to Q-values based on action frequency
+            exploration_bonus = 0.1 / (torch.tensor(self.action_counts, device=self.device) + 1)
+            q_values_with_bonus = q_values + exploration_bonus.unsqueeze(0)
+            
+            action = torch.argmax(q_values_with_bonus, dim=1).item()
         self.set_train_mode(True)
 
+        self.action_counts[action] += 1
         return action
 
     def store_experience(
@@ -178,8 +196,8 @@ class CrossQBrain(RLBrain):
         if len(self.replay_buffer) < self.min_buffer_size:
             return None, {"brain/buffer_size": len(self.replay_buffer)}
 
-        # Sample batch
-        states, actions, rewards, next_states, dones = self.replay_buffer.sample(self.batch_size)
+        # Sample batch with indices for priority updates
+        states, actions, rewards, next_states, dones, indices = self.replay_buffer.sample(self.batch_size)
 
         # Move to device for computation
         states = states.to(self.device)
@@ -209,16 +227,20 @@ class CrossQBrain(RLBrain):
         # Update epsilon
         self._update_epsilon()
 
-        # Metrics
+        # Update priorities in replay buffer
         with torch.no_grad():
-            td_error = (q_pred - q_target).abs().mean().item()
+            td_errors = (q_pred - q_target).abs().cpu().numpy()
+            self.replay_buffer.update_priorities(indices, td_errors)
 
+        # Metrics
+        td_error_mean = td_errors.mean()
         metrics = {
             "brain/loss": loss.item(),
             "brain/q_pred_mean": q_pred.mean().item(),
-            "brain/td_error": td_error,
+            "brain/td_error": td_error_mean,
             "brain/epsilon": self.epsilon,
             "brain/buffer_size": len(self.replay_buffer),
+            "brain/max_priority": self.replay_buffer.max_priority,
         }
 
         return loss, metrics

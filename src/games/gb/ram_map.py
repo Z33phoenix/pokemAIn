@@ -10,8 +10,8 @@ from typing import Tuple, Optional, List, Dict, Any
 # -----------------------------------------------------------------------------#
 HP_CURRENT = 0xD16C  # 2 bytes
 HP_MAX = 0xD16E  # 2 bytes
-ENEMY_HP_CURRENT = 0xCFE6  # 2 bytes
-ENEMY_HP_MAX = 0xCFE8  # 2 bytes
+ENEMY_HP_CURRENT = 0xCFE6  # 2 bytes (CFE6-CFE7)
+ENEMY_HP_MAX = 0xCFF4  # 2 bytes (CFF4-CFF5) - FIXED from 0xCFE8
 PARTY_SIZE = 0xD163  # 1 byte
 X_POS = 0xD362  # 1 byte
 Y_POS = 0xD361  # 1 byte
@@ -87,7 +87,9 @@ def read_player_hp(memory) -> Tuple[int, int]:
     return _read_u16(memory, HP_CURRENT), _read_u16(memory, HP_MAX)
 
 def read_enemy_hp(memory) -> Tuple[int, int]:
-    return _read_u16(memory, ENEMY_HP_CURRENT), _read_u16(memory, ENEMY_HP_MAX)
+    current_hp = _read_u16(memory, ENEMY_HP_CURRENT)
+    max_hp = _read_u16(memory, ENEMY_HP_MAX)
+    return current_hp, max_hp
 
 def read_player_position(memory) -> Tuple[int, int]:
     return memory[X_POS], memory[Y_POS]

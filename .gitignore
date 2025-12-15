@@ -23,6 +23,7 @@ states/
 summaries/
 tests/
 .claude/
+readmes/
 
 # File Ignores
 extract_maps.py

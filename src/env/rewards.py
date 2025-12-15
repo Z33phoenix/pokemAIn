@@ -45,6 +45,16 @@ class RewardSystem:
         self.consecutive_already_out = 0
         self.last_narrative = ""
         self.cursor_history: list[Optional[str]] = []  # Track recent cursor selections for cycling detection
+        
+        # Battle reward tracking to prevent farming
+        self.current_battle_rewards = 0.0
+        self.battle_turns = 0
+        
+        # Menu timeout tracking
+        self.menu_open_steps = 0
+        
+        # Running from trainer battle tracking
+        self.consecutive_run_attempts = 0
 
     def set_memory_interface(self, memory_interface: MemoryInterface):
         """Set the memory interface for this reward system."""
@@ -73,6 +83,10 @@ class RewardSystem:
         self.consecutive_already_out = 0
         self.last_narrative = ""
         self.cursor_history = []
+        self.current_battle_rewards = 0.0
+        self.battle_turns = 0
+        self.menu_open_steps = 0
+        self.consecutive_run_attempts = 0
 
     def compute_components(
         self,
@@ -92,8 +106,15 @@ class RewardSystem:
             goal_ctx: Optional goal context for goal-aware rewards
         """
         cfg = self.config
+        battle_active = info.get("battle_active", False)
+        
+        # Reduce step penalty during battles to not overwhelm damage rewards
+        step_penalty = cfg.get("step_penalty", 0.0)
+        if battle_active:
+            step_penalty *= 0.2  # 80% reduction during battles
+        
         rewards = {
-            "global_reward": cfg.get("step_penalty", 0.0),
+            "global_reward": step_penalty,
             "nav_reward": 0.0,
             "battle_reward": 0.0,
             "menu_reward": 0.0,
@@ -231,16 +252,41 @@ class RewardSystem:
             rewards["nav_reward"] += cfg.get("nav_menu_open_bonus", 0.0)
 
         battle_active = info.get("battle_active", False)
+        max_battle_reward_per_battle = cfg.get("max_battle_reward_per_battle", 15.0)  # Cap total battle rewards
+        min_battle_penalty_per_battle = cfg.get("min_battle_penalty_per_battle", -20.0)  # Cap total battle penalties
+        
         if battle_active:
-            rewards["battle_reward"] += cfg.get("battle_tick", 0.0)
+            # Track battle turns and apply mild time penalty
+            self.battle_turns += 1
+            battle_tick_reward = cfg.get("battle_tick", 0.0)
+            
+            # Only apply tick penalty if we haven't hit the penalty floor
+            if self.current_battle_rewards > min_battle_penalty_per_battle:
+                rewards["battle_reward"] += battle_tick_reward
+                self.current_battle_rewards += battle_tick_reward
         else:
             if self.was_in_battle:
                 # Battle just ended - check if we won or lost
                 hp_percent = info.get("hp_percent", 1.0)
-                if hp_percent < cfg.get("battle_loss_threshold", 0.0):
-                    rewards["battle_reward"] += cfg.get("battle_loss", 0.0)
+                battle_loss_threshold = cfg.get("battle_loss_threshold", 0.0)
+                battle_win_reward = cfg.get("battle_win", 0.0)
+                battle_loss_reward = cfg.get("battle_loss", 0.0)
+                
+                if hp_percent < battle_loss_threshold:
+                    rewards["battle_reward"] += battle_loss_reward
+                    print(f"💀 BATTLE LOST! HP: {hp_percent:.1%} → Reward: {battle_loss_reward}")
                 else:
-                    rewards["battle_reward"] += cfg.get("battle_win", 0.0)
+                    rewards["battle_reward"] += battle_win_reward
+                    print(f"🏆 BATTLE WON! HP: {hp_percent:.1%} → Reward: {battle_win_reward}")
+                
+                # Reset battle tracking
+                print(f"📊 BATTLE END: Total battle rewards this fight: {self.current_battle_rewards:.1f}")
+                self.current_battle_rewards = 0.0
+                self.battle_turns = 0
+            elif not self.was_in_battle:
+                # Not in battle, reset counters
+                self.battle_turns = 0
+                
             self.last_enemy_hp_fraction = None
         self.was_in_battle = battle_active
 
@@ -252,9 +298,27 @@ class RewardSystem:
             if enemy_hp_percent is not None:
                 if self.last_enemy_hp_fraction is None:
                     self.last_enemy_hp_fraction = enemy_hp_percent
+                    
                 enemy_delta = (self.last_enemy_hp_fraction or 0.0) - enemy_hp_percent
+                
                 if enemy_delta > 0:
-                    rewards["battle_reward"] += cfg.get("battle_damage", 0.0) * enemy_delta
+                    damage_reward = cfg.get("battle_damage", 0.0) * enemy_delta
+                    original_damage_reward = damage_reward
+                    
+                    # Cap battle damage rewards to prevent farming
+                    if self.current_battle_rewards + damage_reward > max_battle_reward_per_battle:
+                        damage_reward = max(0, max_battle_reward_per_battle - self.current_battle_rewards)
+                        was_capped = True
+                    else:
+                        was_capped = False
+                    
+                    # Only log when actual damage occurs
+                    print(f"💥 DAMAGE DEALT! Enemy HP: {enemy_hp_percent:.1%} → Δ{enemy_delta:.1%} → Reward: {damage_reward:.3f}" + 
+                          (f" (capped from {original_damage_reward:.3f})" if was_capped else ""))
+                    
+                    rewards["battle_reward"] += damage_reward
+                    self.current_battle_rewards += damage_reward
+                    
                 self.last_enemy_hp_fraction = enemy_hp_percent
             if hp_percent is not None and self.last_hp_fraction is not None:
                 damage_taken = self.last_hp_fraction - hp_percent
@@ -269,12 +333,29 @@ class RewardSystem:
 
         rewards["global_reward"] += self._compute_level_reward_bonus()
 
-        rewards["menu_reward"] = self.compute_menu_reward(info, goal_ctx)
+        # Track menu timeout and apply escalating penalties (EXCLUDE battle menus)
+        menu_active = self._menu_active(info)
+        battle_active = info.get("battle_active", False)
+        
+        # Only apply menu timeout penalties to NON-battle menus
+        if menu_active and not battle_active:
+            self.menu_open_steps += 1
+            # Apply escalating penalty for staying in menus too long
+            if self.menu_open_steps > 10:  # After 10 steps in menu
+                timeout_penalty = cfg.get("menu", {}).get("menu_timeout_penalty", -5.0)
+                # Exponentially worse the longer you stay
+                multiplier = min((self.menu_open_steps - 10) * 0.5, 5.0)
+                rewards["menu_reward"] += timeout_penalty * multiplier
+        else:
+            # Reset counter when not in non-battle menus
+            self.menu_open_steps = 0
+
+        rewards["menu_reward"] += self.compute_menu_reward(info, goal_ctx)
         rewards["goal_bonus"] = self.compute_goal_bonus(
             info, goal_ctx, prev_hp_fraction=prev_hp_fraction, was_in_battle_prev=was_in_battle_prev
         )
 
-        # Penalty for repeatedly trying to switch to active Pokemon
+        # SEVERE penalty for repeatedly trying to switch to active Pokemon
         current_narrative = info.get("text_narrative", "")
         if current_narrative and "already out" in current_narrative.lower():
             # This message appears when trying to switch to the active Pokemon
@@ -285,15 +366,56 @@ class RewardSystem:
                 # New instance of the message
                 self.consecutive_already_out = 1
 
-            # Apply escalating penalty based on repetitions
-            base_penalty = cfg.get("switch_active_pokemon_penalty", -0.1)
-            # Scale penalty with consecutive attempts (gets worse with repetition)
-            penalty_multiplier = min(self.consecutive_already_out, 5)  # Cap at 5x
-            rewards["menu_reward"] += base_penalty * penalty_multiplier
+            # Apply SEVERE escalating penalty based on repetitions
+            base_penalty = cfg.get("switch_active_pokemon_penalty", -10.0)
+            # Scale penalty with consecutive attempts (gets exponentially worse)
+            penalty_multiplier = min(self.consecutive_already_out ** 1.5, 10)  # Exponential scaling, cap at 10x
+            severe_penalty = base_penalty * penalty_multiplier
+            
+            # Apply penalty, but reduce during battles to allow learning
+            battle_active = info.get("battle_active", False)
+            penalty_scale = 0.2 if battle_active else 1.0  # 80% reduction during battles
+            
+            scaled_penalty = severe_penalty * penalty_scale
+            rewards["menu_reward"] += scaled_penalty
+            rewards["battle_reward"] += scaled_penalty * 0.5
+            rewards["global_reward"] += scaled_penalty * 0.3
         else:
             # Reset counter if we're not seeing the "already out" message
             if self.last_narrative and "already out" in self.last_narrative.lower():
                 self.consecutive_already_out = 0
+
+        # SEVERE penalty for repeatedly trying to run from trainer battles
+        if current_narrative and any(phrase in current_narrative.lower() for phrase in 
+                                   ["can't escape", "no! there's no running", "couldn't get away", "can't run away"]):
+            # This message appears when trying to run from trainer battles
+            if current_narrative == self.last_narrative:
+                # Same message as before - increment counter
+                self.consecutive_run_attempts += 1
+            else:
+                # New instance of the message
+                self.consecutive_run_attempts = 1
+
+            # Apply SEVERE escalating penalty based on repetitions
+            base_penalty = cfg.get("run_from_trainer_penalty", -12.0)
+            # Scale penalty with consecutive attempts (gets exponentially worse)
+            penalty_multiplier = min(self.consecutive_run_attempts ** 1.5, 8)  # Exponential scaling, cap at 8x
+            severe_penalty = base_penalty * penalty_multiplier
+            
+            # Apply penalty, but reduce during battles to allow learning  
+            penalty_scale = 0.2 if battle_active else 1.0  # 80% reduction during battles
+            
+            scaled_penalty = severe_penalty * penalty_scale
+            rewards["battle_reward"] += scaled_penalty
+            rewards["menu_reward"] += scaled_penalty * 0.5
+            rewards["global_reward"] += scaled_penalty * 0.3
+            
+            print(f"🚫 CAN'T RUN FROM TRAINER! Attempt #{self.consecutive_run_attempts} → Penalty: {severe_penalty:.1f}")
+        else:
+            # Reset counter if we're not seeing the "can't run" message
+            if self.last_narrative and any(phrase in self.last_narrative.lower() for phrase in 
+                                         ["can't escape", "no! there's no running", "couldn't get away", "can't run away"]):
+                self.consecutive_run_attempts = 0
 
         self.last_narrative = current_narrative
 
@@ -316,6 +438,9 @@ class RewardSystem:
                                      recent[0] != recent[1])
                     if is_alternating:
                         menu_cycling_penalty = cfg.get("menu_cycling_penalty", -1.0)
+                        # Reduce menu cycling penalty during battles
+                        if battle_active:
+                            menu_cycling_penalty *= 0.3  # 70% reduction during battles
                         rewards["menu_reward"] += menu_cycling_penalty
         else:
             # Clear history when not in menu
@@ -324,6 +449,15 @@ class RewardSystem:
         clip_value = cfg.get("reward_clip", np.inf)
         for key, value in rewards.items():
             rewards[key] = float(np.clip(value, -clip_value, clip_value))
+        
+        # DEBUG: Log when total reward is extremely negative
+        total_reward = sum(rewards.values())
+        if total_reward < -50:
+            print(f"🚨 HUGE NEGATIVE REWARD: {total_reward:.1f}")
+            for component, value in rewards.items():
+                if abs(value) > 0.1:
+                    print(f"   {component}: {value:.1f}")
+        
         return rewards
 
     def compute_reward(self, info: Dict[str, Any], obs, action: int) -> float:
@@ -345,13 +479,18 @@ class RewardSystem:
         self, info: Dict[str, Any], goal_ctx: Optional[Dict[str, Any]]
     ) -> float:
         """
-        Menu-specific shaping.
+        Menu-specific shaping. EXCLUDES battle menus from penalties.
         """
         menu_cfg = self.config.get("menu", {})
         menu_active = self._menu_active(info)
+        battle_active = info.get("battle_active", False)
         reward = 0.0
+        
+        # Don't apply menu penalties to battle menus
         if not menu_active:
-            reward += menu_cfg.get("inactive_penalty", 0.0)
+            # Only apply inactive penalty if not in battle
+            if not battle_active:
+                reward += menu_cfg.get("inactive_penalty", 0.0)
             if self.last_menu_open:
                 reward += menu_cfg.get("close_penalty", 0.0)
             self.last_menu_cursor = None
@@ -361,7 +500,8 @@ class RewardSystem:
             clip_value = menu_cfg.get("reward_clip", self.config.get("reward_clip", np.inf))
             return float(np.clip(reward, -clip_value, clip_value))
 
-        if not self.last_menu_open:
+        # Only penalize menu opening if NOT in battle
+        if not self.last_menu_open and not battle_active:
             reward += menu_cfg.get("opened_menu", 0.0)
 
         cursor = info.get("menu_cursor")
@@ -380,12 +520,15 @@ class RewardSystem:
         if cursor is not None:
             if desired_cursor is not None and tuple(cursor) == tuple(desired_cursor):
                 reward += menu_cfg.get("cursor_on_target", 0.0)
+            # Only penalize cursor movement in non-battle menus
             if self.last_menu_cursor is not None and cursor != self.last_menu_cursor:
-                reward += menu_cfg.get("cursor_move", 0.0)
+                if not battle_active:  # Don't penalize battle cursor movement
+                    reward += menu_cfg.get("cursor_move", 0.0)
                 self.menu_steps_stagnant = 0
             else:
                 self.menu_steps_stagnant += 1
-                if self.menu_steps_stagnant >= menu_cfg.get("stale_threshold", 0):
+                # Only apply stale penalty to non-battle menus
+                if not battle_active and self.menu_steps_stagnant >= menu_cfg.get("stale_threshold", 0):
                     reward += menu_cfg.get("stale_penalty", 0.0)
         else:
             self.menu_steps_stagnant = 0
