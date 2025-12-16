@@ -130,7 +130,13 @@ class PokemonGBGym(GameEnvironment):
 
         self.action_repeat = int(config.get("action_repeat", 24))
         self.release_frame = int(config.get("release_frame", 8))
-        self.max_steps = int(config.get("max_steps", 2048))
+        max_steps_cfg = config.get("max_steps", 0)
+        try:
+            self.max_steps = int(max_steps_cfg)
+        except (TypeError, ValueError):
+            self.max_steps = 0
+        if self.max_steps < 0:
+            self.max_steps = 0
         # NOOP is action 0 (do nothing), then the actual button presses
         self.valid_actions = [
             None,  # NOOP - no action
@@ -245,7 +251,10 @@ class PokemonGBGym(GameEnvironment):
             self._prev_map_id = current_map
 
         terminated = False
-        truncated = self.step_count >= self.max_steps
+        truncated = False
+        if self.max_steps > 0 and self.step_count >= self.max_steps:
+            truncated = True
+            self.step_count = 0
         reward = 0.0
         return obs, reward, terminated, truncated, info
 

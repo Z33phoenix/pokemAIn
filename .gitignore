@@ -18,6 +18,7 @@ venv/
 *.ram
 *.state
 *.pth
+*.pt
 experiments/
 states/
 summaries/

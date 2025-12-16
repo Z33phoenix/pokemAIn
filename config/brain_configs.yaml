@@ -50,8 +50,8 @@ crossq:
 
   # Exploration
   epsilon_start: 1.0
-  epsilon_end: 0.05
-  epsilon_decay: 10000  # Steps to decay over
+  epsilon_end: 0.15
+  epsilon_decay_rate: 20000  # Controls exponential decay speed (larger = slower)
 
   # Experience replay
   buffer_capacity: 50000  # Override with memory preset
@@ -139,7 +139,7 @@ rainbow:
 # To increase sample efficiency:
 # 1. Increase buffer_capacity (more diverse experiences)
 # 2. Increase batch_size (more stable gradients)
-# 3. Tune epsilon_decay (longer exploration phase)
+# 3. Tune epsilon_decay_rate (longer exploration phase)
 # 4. Use Rainbow DQN (multiple enhancements)
 #
 # Current settings use ~3-4GB VRAM with CrossQ, leaving room for other processes.

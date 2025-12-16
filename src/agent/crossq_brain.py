@@ -33,7 +33,8 @@ class CrossQBrain(RLBrain):
             - gamma: Discount factor
             - epsilon_start: Initial exploration rate
             - epsilon_end: Final exploration rate
-            - epsilon_decay: Steps to decay epsilon over
+            - epsilon_decay_rate: Controls rate of exponential epsilon decay
+              (falls back to epsilon_decay for backwards compatibility)
             - buffer_capacity: Replay buffer size
             - batch_size: Training batch size
             - min_buffer_size: Minimum buffer size before training
@@ -80,8 +81,10 @@ class CrossQBrain(RLBrain):
         self.gamma = config.get("gamma", 0.99)
         self.epsilon = config.get("epsilon_start", 1.0)
         self.epsilon_end = config.get("epsilon_end", 0.05)
-        self.epsilon_decay = config.get("epsilon_decay", 100000)
         self.epsilon_start = self.epsilon
+        self.epsilon_decay_rate = float(
+            config.get("epsilon_decay_rate", config.get("epsilon_decay", 100000))
+        )
         self.steps_done = 0
         
         # Exploration improvements for sparse rewards
@@ -303,11 +306,11 @@ class CrossQBrain(RLBrain):
         return loss, metrics
 
     def _update_epsilon(self) -> None:
-        """Linearly decay epsilon."""
+        """Exponentially decay epsilon using configured decay rate."""
         self.steps_done += 1
-        if self.epsilon > self.epsilon_end:
-            decay_amount = (self.epsilon_start - self.epsilon_end) / self.epsilon_decay
-            self.epsilon = max(self.epsilon_end, self.epsilon - decay_amount)
+        decay_rate = max(1.0, self.epsilon_decay_rate)
+        decay_multiplier = np.exp(-self.steps_done / decay_rate)
+        self.epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * decay_multiplier
 
     def save_checkpoint(self, path: str) -> None:
         """Save brain state to disk."""

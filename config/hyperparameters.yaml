@@ -18,7 +18,7 @@ environment:
   emulation_speed: 5
   action_repeat: 24
   release_frame: 8
-  max_steps: 2048
+  max_steps: 0                # 0 = unlimited, rely on game health rather than episodes
 
 # =============================================================================
 # Training
@@ -59,7 +59,7 @@ rewards:
   nav_warp_proximity: 0.1      # Small shaping towards unexplored warps
   
   # Movement penalties (only after repeated failures)
-  wall_bump: -0.05             # Mild penalty per bump (accumulates if stuck)
+  wall_bump: -0.5             # Mild penalty per bump (accumulates if stuck)
   stale_penalty: -0.1          # Penalty for being completely stuck
   stale_threshold: 50          # Steps before stale penalty kicks in
   

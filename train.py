@@ -108,9 +108,6 @@ class TrainingConfig:
         cfg["training"] = cfg.get("training", {}).copy()
         if total_steps is not None:
             cfg["training"]["total_steps"] = total_steps
-        training_steps = cfg["training"].get("total_steps")
-        if training_steps is not None:
-            env_cfg["max_steps"] = int(training_steps)
         cfg["environment"] = env_cfg
         return cfg
 
@@ -151,10 +148,8 @@ class PokemonTrainer:
         self.current_badges = 0
 
         # Tracking
-        self.best_reward = float("-inf")
-        self.episode_count = 0
-        self.episode_reward = 0.0
-        self.episode_steps = 0
+        self.session_reward = 0.0
+        self.session_steps = 0
         self._text_embedding_dim = TEXT_EMBED_DIM
         self._zero_text_embedding = np.zeros(self._text_embedding_dim, dtype=np.float32)
         self._current_cursor_embedding = self._zero_text_embedding.copy()
@@ -236,7 +231,7 @@ class PokemonTrainer:
 
     def run(self):
         """Main training loop."""
-        obs, info = self._reset_env()
+        obs, info = self._boot_env()
         self._update_memory(info)
         self._poll_goal_strategy(info, force=True)
 
@@ -265,7 +260,7 @@ class PokemonTrainer:
                 action=action_data["local_action"],
                 reward=reward_data["total"],
                 next_obs=next_obs,
-                done=terminated or truncated,
+                done=False,
                 text_embedding=current_cursor_embedding,
                 next_text_embedding=next_cursor_embedding
             )
@@ -282,7 +277,7 @@ class PokemonTrainer:
                 local_action=action_data["local_action"],
                 env_action=action_data["env_action"],
                 reward=reward_data["total"],
-                done=terminated or truncated,
+                done=False,
                 text_embedding=current_cursor_embedding,
                 next_text_embedding=next_cursor_embedding
             ):
@@ -294,6 +289,10 @@ class PokemonTrainer:
             # Loop upkeep
             obs, info = next_obs, next_info
 
+            if terminated or next_info.get("window_closed"):
+                print("\nEnvironment requested termination. Ending training loop.")
+                break
+
             # Handle map changes (clear goals)
             if next_info.get("map_id") != info.get("map_id"):
                 if self.director.active_goal:
@@ -301,12 +300,6 @@ class PokemonTrainer:
                 self.director.clear_goals()
                 self.goal_step_count = 0
                 self._poll_goal_strategy(next_info)
-
-            # Episode end handling
-            if terminated or truncated:
-                obs, info = self._handle_episode_end(reward_data["total"])
-                self.goal_step_count = 0
-                self._update_memory(info)
 
             # Checkpoint saving
             if self.steps_done % self.cfg["training"]["save_frequency"] == 0:
@@ -316,14 +309,14 @@ class PokemonTrainer:
 
         self._cleanup()
 
-    def _reset_env(self) -> Tuple[np.ndarray, Dict[str, Any]]:
-        """Reset environment and load latest badge checkpoint."""
+    def _boot_env(self) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Boot environment once and initialize tracking state."""
         obs, info = self.env.reset()
         self.reward_sys.reset()
 
         self.current_badges = info.get("badges", 0)
-        self.episode_reward = 0.0
-        self.episode_steps = 0
+        self.session_reward = 0.0
+        self.session_steps = 0
         self.goal_step_count = 0
         return obs, info
 
@@ -615,8 +608,8 @@ class PokemonTrainer:
         self.logger.log_step(metrics, self.steps_done)
 
     def _log_progress(self, info, reward_data, pbar):
-        self.episode_reward += reward_data["total"]
-        self.episode_steps += 1
+        self.session_reward += reward_data["total"]
+        self.session_steps += 1
 
         brain_metrics = self.agent.get_metrics()
         epsilon = brain_metrics.get("brain/epsilon", 0.0)
@@ -643,24 +636,11 @@ class PokemonTrainer:
 
         pbar.set_description(
             f"[{self.brain_type.upper()}|{goal_strat}] "
-            f"Rew:{self.episode_reward:.1f} | "
+            f"Rew:{self.session_reward:.1f} | "
             f"ε:{epsilon:.3f} | "
             f"Badges:{self.current_badges} | "
             f"{location_info}{cursor_info}"
         )
-
-    def _handle_episode_end(self, final_reward):
-        self.logger.log_step({
-            "episode/reward": self.episode_reward,
-            "episode/badges": self.current_badges
-        }, self.steps_done)
-        self.episode_count += 1
-
-        if self.episode_reward > self.best_reward:
-            self.best_reward = self.episode_reward
-            self._save_agent("best_reward")
-
-        return self.env.reset()
 
     def _save_agent(self, tag: str):
         path = os.path.join(self.checkpoint_dir, f"agent_{self.brain_type}_{tag}.pth")
