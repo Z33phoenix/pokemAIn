@@ -3,6 +3,7 @@ CrossQ Brain implementation - a sample-efficient Q-learning variant.
 This is a concrete implementation of the RLBrain interface.
 """
 from typing import Any, Dict, Optional, Tuple
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ import torch.optim as optim
 
 from src.agent.rl_brain import RLBrain, ReplayBuffer
 from src.vision.encoder import NatureCNN
+from src.utils.human_buffer import HumanExperienceBuffer, load_human_dataset
 
 
 class CrossQBrain(RLBrain):
@@ -55,6 +57,7 @@ class CrossQBrain(RLBrain):
             fc_input_dim = feature_dim + self.text_feature_dim
         else:
             fc_input_dim = input_dim + self.text_feature_dim
+        self.fc_input_dim = fc_input_dim
 
         self.q_net = nn.Sequential(
             nn.Linear(fc_input_dim, 256),
@@ -106,6 +109,16 @@ class CrossQBrain(RLBrain):
             device="cpu",  # Store on CPU to save VRAM
             alpha=prioritization_alpha
         )
+        self.human_batch_size = int(config.get("human_batch_size", 0))
+        if self.human_batch_size <= 0:
+            human_ratio = float(config.get("human_batch_ratio", 0.0))
+            self.human_batch_size = int(round(self.batch_size * human_ratio))
+        self.human_batch_size = min(self.human_batch_size, self.batch_size)
+        self.human_buffer_min_size = int(config.get("human_buffer_min_size", max(1, self.human_batch_size)))
+        self.human_buffer: Optional[HumanExperienceBuffer] = None
+        human_buffer_path = config.get("human_buffer_path")
+        if human_buffer_path:
+            self._load_human_buffer(human_buffer_path)
 
     def encode_obs(self, obs: torch.Tensor) -> torch.Tensor:
         """Encode raw observations into feature vector."""
@@ -193,11 +206,53 @@ class CrossQBrain(RLBrain):
             metrics: Training metrics dictionary
         """
         # Not enough data yet
-        if len(self.replay_buffer) < self.min_buffer_size:
-            return None, {"brain/buffer_size": len(self.replay_buffer)}
+        human_batch = 0
+        if self.human_buffer and len(self.human_buffer) >= self.human_buffer_min_size:
+            human_batch = min(self.human_batch_size, self.batch_size)
+        agent_batch = self.batch_size - human_batch
+
+        if agent_batch > 0 and len(self.replay_buffer) < max(self.min_buffer_size, agent_batch):
+            return None, {
+                "brain/buffer_size": len(self.replay_buffer),
+                "brain/human_buffer": len(self.human_buffer) if self.human_buffer else 0,
+            }
+        if agent_batch == 0 and human_batch == 0:
+            return None, {
+                "brain/buffer_size": len(self.replay_buffer),
+                "brain/human_buffer": len(self.human_buffer) if self.human_buffer else 0,
+            }
 
         # Sample batch with indices for priority updates
-        states, actions, rewards, next_states, dones, indices = self.replay_buffer.sample(self.batch_size)
+        batch_states = []
+        batch_actions = []
+        batch_rewards = []
+        batch_next_states = []
+        batch_dones = []
+        indices = None
+        agent_sample_count = 0
+
+        if agent_batch > 0:
+            states, actions, rewards, next_states, dones, indices = self.replay_buffer.sample(agent_batch)
+            agent_sample_count = agent_batch
+            batch_states.append(states)
+            batch_actions.append(actions)
+            batch_rewards.append(rewards)
+            batch_next_states.append(next_states)
+            batch_dones.append(dones)
+
+        if human_batch > 0 and self.human_buffer:
+            h_states, h_actions, h_rewards, h_next_states, h_dones = self.human_buffer.sample(human_batch)
+            batch_states.append(h_states)
+            batch_actions.append(h_actions)
+            batch_rewards.append(h_rewards)
+            batch_next_states.append(h_next_states)
+            batch_dones.append(h_dones)
+
+        states = torch.cat(batch_states, dim=0)
+        actions = torch.cat(batch_actions, dim=0)
+        rewards = torch.cat(batch_rewards, dim=0)
+        next_states = torch.cat(batch_next_states, dim=0)
+        dones = torch.cat(batch_dones, dim=0)
 
         # Move to device for computation
         states = states.to(self.device)
@@ -230,7 +285,8 @@ class CrossQBrain(RLBrain):
         # Update priorities in replay buffer
         with torch.no_grad():
             td_errors = (q_pred - q_target).abs().cpu().numpy()
-            self.replay_buffer.update_priorities(indices, td_errors)
+            if indices is not None and agent_sample_count > 0:
+                self.replay_buffer.update_priorities(indices, td_errors[:agent_sample_count])
 
         # Metrics
         td_error_mean = td_errors.mean()
@@ -240,6 +296,7 @@ class CrossQBrain(RLBrain):
             "brain/td_error": td_error_mean,
             "brain/epsilon": self.epsilon,
             "brain/buffer_size": len(self.replay_buffer),
+            "brain/human_buffer": len(self.human_buffer) if self.human_buffer else 0,
             "brain/max_replay_buffer_priority": self.replay_buffer.max_priority,
         }
 
@@ -290,4 +347,85 @@ class CrossQBrain(RLBrain):
             "brain/epsilon": self.epsilon,
             "brain/buffer_size": len(self.replay_buffer),
             "brain/steps_done": self.steps_done,
+            "brain/human_buffer": len(self.human_buffer) if self.human_buffer else 0,
         }
+
+    def _prepare_obs_tensor(self, obs_batch: np.ndarray) -> torch.Tensor:
+        tensor = torch.from_numpy(obs_batch)
+        if tensor.dim() == 3:
+            tensor = tensor.unsqueeze(1)
+        elif tensor.dim() == 4 and tensor.shape[-1] in (1, 3):
+            tensor = tensor.permute(0, 3, 1, 2)
+        tensor = tensor.float()
+        if tensor.max() > 1.0:
+            tensor = tensor / 255.0
+        return tensor
+
+    def _encode_human_observations(
+        self,
+        frames: np.ndarray,
+        text_embeddings: Optional[np.ndarray]
+    ) -> torch.Tensor:
+        if frames.size == 0:
+            return torch.zeros((0, self.fc_input_dim), dtype=torch.float32)
+
+        batch_size = 64
+        encoded_batches = []
+        total = frames.shape[0]
+        text_array = None
+        if text_embeddings is not None:
+            text_array = torch.from_numpy(text_embeddings).float()
+
+        for start in range(0, total, batch_size):
+            end = min(start + batch_size, total)
+            obs_tensor = self._prepare_obs_tensor(frames[start:end]).to(self.device)
+            with torch.no_grad():
+                features = self.encode_obs(obs_tensor)
+            features = features.detach().cpu()
+            if text_array is not None:
+                text_batch = text_array[start:end]
+                if text_batch.dim() == 1:
+                    text_batch = text_batch.unsqueeze(0)
+                features = torch.cat([features, text_batch], dim=1)
+            encoded_batches.append(features)
+
+        return torch.cat(encoded_batches, dim=0)
+
+    def _load_human_buffer(self, path: str) -> None:
+        dataset = load_human_dataset(path)
+        if dataset is None:
+            print(f"ƒsÿ Human buffer not found at {path}")
+            return
+
+        data, metadata = dataset
+        obs = data.get("obs")
+        next_obs = data.get("next_obs")
+        if obs is None or next_obs is None:
+            print(f"ƒsÿ Incomplete human buffer at {path}")
+            return
+
+        text_embeddings = data.get("text_embeddings")
+        next_text_embeddings = data.get("next_text_embeddings")
+        encoded_states = self._encode_human_observations(obs, text_embeddings)
+        encoded_next_states = self._encode_human_observations(next_obs, next_text_embeddings)
+
+        actions_arr = data.get("actions")
+        rewards_arr = data.get("rewards")
+        dones_arr = data.get("dones")
+        if actions_arr is None or rewards_arr is None or dones_arr is None:
+            print(f"ƒsÿ Missing fields in human buffer at {path}")
+            return
+
+        actions = torch.from_numpy(actions_arr).long()
+        rewards = torch.from_numpy(rewards_arr).float()
+        dones = torch.from_numpy(dones_arr).float()
+
+        self.human_buffer = HumanExperienceBuffer.from_tensors(
+            states=encoded_states,
+            actions=actions,
+            rewards=rewards,
+            next_states=encoded_next_states,
+            dones=dones
+        )
+        size = len(self.human_buffer)
+        print(f"ƒo\" Loaded human buffer ({size} samples) from {path}")

@@ -57,6 +57,11 @@ crossq:
   buffer_capacity: 50000  # Override with memory preset
   batch_size: 32          # Override with memory preset
   min_buffer_size: 1000   # Start training after this many samples
+  # Human demonstration buffer (optional)
+  human_buffer_path: saves_human_buffer.pt       # Path to torch file produced by record_human_buffer.py
+  human_batch_size: 8           # Number of human samples per batch (overrides ratio)
+  human_batch_ratio: 0.25       # Fallback ratio if batch size not specified
+  human_buffer_min_size: 8      # Minimum human samples before mixing
 
   # Device
   device: "cuda"  # "cuda" or "cpu"

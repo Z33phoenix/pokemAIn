@@ -85,8 +85,8 @@ rewards:
   battle_damage_taken: -3.0     # 10x louder penalty for taking damage
   battle_win: 80.0              # 10x clearer victory signal
   battle_loss: -30.0            # 10x clearer loss penalty
-  battle_hp_high_threshold: 0.8 # Threshold for HP maintenance bonus
-  battle_hp_high_bonus: 0.5     # Small bonus for staying healthy
+  battle_hp_high_threshold: 0.0 # Threshold for HP maintenance bonus
+  battle_hp_high_bonus: 0.01     # Small bonus for staying healthy
   max_battle_reward_per_battle: 150.0   # Higher cap to match amplified rewards
   min_battle_penalty_per_battle: -100.0 # Cap total penalties per battle
 

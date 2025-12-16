@@ -54,6 +54,7 @@ from src.env.rewards import RewardSystem
 from src.utils.logger import Logger
 from src.utils.brain_config_loader import BrainConfigLoader
 from src.utils.strategy_config_loader import StrategyConfigLoader, load_strategy_preset
+from src.utils.human_buffer import HumanExperienceRecorder
 
 
 BADGE_SEQUENCE = [
@@ -73,6 +74,8 @@ REGION_BY_GAME = {
     "pokemon_yellow": "Kanto",
     "pokemon_emerald": "Hoenn",
 }
+
+TEXT_EMBED_DIM = 17
 
 
 class TrainingConfig:
@@ -126,7 +129,8 @@ class PokemonTrainer:
         checkpoint_root: str,
         save_tag: str,
         device: str,
-        seed: int | None
+        seed: int | None,
+        human_recorder: Optional[HumanExperienceRecorder] = None
     ):
         self.cfg = cfg
         self.brain_type = brain_type
@@ -135,6 +139,7 @@ class PokemonTrainer:
         self.save_tag = save_tag
         self.device = torch.device(device)
         self.seed = self._seed_everything(seed)
+        self.human_recorder = human_recorder
 
         self.checkpoint_dir, self.log_dir = self._prepare_dirs(checkpoint_root)
         self.logger = Logger(log_dir=self.log_dir, run_name=run_name)
@@ -150,7 +155,7 @@ class PokemonTrainer:
         self.episode_count = 0
         self.episode_reward = 0.0
         self.episode_steps = 0
-        self._text_embedding_dim = 17
+        self._text_embedding_dim = TEXT_EMBED_DIM
         self._zero_text_embedding = np.zeros(self._text_embedding_dim, dtype=np.float32)
         self._current_cursor_embedding = self._zero_text_embedding.copy()
 
@@ -270,6 +275,19 @@ class PokemonTrainer:
                 self._periodically_log_metrics(reward_data, metrics)
             else:
                 self._periodically_log_metrics(reward_data, {})
+
+            if self._maybe_record_human_demo(
+                obs=obs,
+                next_obs=next_obs,
+                local_action=action_data["local_action"],
+                env_action=action_data["env_action"],
+                reward=reward_data["total"],
+                done=terminated or truncated,
+                text_embedding=current_cursor_embedding,
+                next_text_embedding=next_cursor_embedding
+            ):
+                print(f"\nCaptured {self.human_recorder.size} human transitions. Stopping early.")
+                break
 
             self._log_progress(info, reward_data, pbar)
 
@@ -650,10 +668,38 @@ class PokemonTrainer:
 
     def _cleanup(self):
         self._save_agent(self.save_tag)
+        if self.human_recorder:
+            path = self.human_recorder.save()
+            print(f"\nƒo\" Human buffer saved to {path}")
         self.logger.close()
         if hasattr(self, "director"):
             self.director.shutdown()
         self.env.close()
+
+    def _maybe_record_human_demo(
+        self,
+        obs: np.ndarray,
+        next_obs: np.ndarray,
+        local_action: int,
+        env_action: int,
+        reward: float,
+        done: bool,
+        text_embedding: np.ndarray,
+        next_text_embedding: np.ndarray
+    ) -> bool:
+        if not self.human_recorder:
+            return False
+        self.human_recorder.record(
+            obs=obs,
+            action=local_action,
+            env_action=env_action,
+            reward=reward,
+            next_obs=next_obs,
+            done=done,
+            text_embedding=text_embedding,
+            next_text_embedding=next_text_embedding
+        )
+        return self.human_recorder.is_full
 
 
 def train(
@@ -669,6 +715,9 @@ def train(
     state_path_override=None,
     device_override=None,
     seed=None,
+    record_human_buffer_path: Optional[str] = None,
+    human_buffer_steps: int = 2000,
+    emulation_speed_override: Optional[int] = None,
     **brain_overrides
 ):
     """
@@ -687,7 +736,12 @@ def train(
     """
     # Load base config
     cfg = TrainingConfig.load(config_path)
-    cfg = TrainingConfig.apply_overrides(cfg, headless, total_steps_override, state_path_override)
+    total_override = human_buffer_steps if record_human_buffer_path else total_steps_override
+    cfg = TrainingConfig.apply_overrides(cfg, headless, total_override, state_path_override)
+    if emulation_speed_override is not None:
+        env_cfg = cfg.get("environment", {}).copy()
+        env_cfg["emulation_speed"] = emulation_speed_override
+        cfg["environment"] = env_cfg
 
     # Apply strategy preset
     cfg = load_strategy_preset(strategy_preset, cfg)
@@ -709,9 +763,20 @@ def train(
 
     device = device_override or ("cuda" if torch.cuda.is_available() else "cpu")
 
+    human_recorder = None
+    if record_human_buffer_path:
+        if brain_type.lower() != "human":
+            raise ValueError("--record-human-buffer requires --brain human")
+        human_recorder = HumanExperienceRecorder(
+            capacity=human_buffer_steps,
+            output_path=record_human_buffer_path,
+            text_feature_dim=TEXT_EMBED_DIM
+        )
+        print(f"ƒo\" Recording up to {human_buffer_steps} human steps at {record_human_buffer_path}")
+
     trainer = PokemonTrainer(
         cfg, brain_type, brain_config, run_name,
-        checkpoint_root, save_tag, device, seed
+        checkpoint_root, save_tag, device, seed, human_recorder=human_recorder
     )
     trainer.setup()
     trainer.run()
@@ -746,12 +811,20 @@ if __name__ == "__main__":
     parser.add_argument("--state-path", type=str)
     parser.add_argument("--device", type=str)
     parser.add_argument("--seed", type=int)
+    parser.add_argument("--emulation-speed", type=int,
+                        help="Override environment emulation speed (1=normal, higher=faster).")
 
     # Brain overrides
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--buffer-capacity", type=int)
     parser.add_argument("--gamma", type=float)
+
+    # Human buffer collection
+    parser.add_argument("--record-human-buffer", type=str,
+                        help="Path to save a human demonstration buffer (forces human brain)")
+    parser.add_argument("--human-buffer-steps", type=int, default=2000,
+                        help="Number of steps to record for the human buffer")
 
     args = parser.parse_args()
 
@@ -779,5 +852,8 @@ if __name__ == "__main__":
         state_path_override=args.state_path,
         device_override=args.device,
         seed=args.seed,
+        record_human_buffer_path=args.record_human_buffer,
+        human_buffer_steps=args.human_buffer_steps,
+        emulation_speed_override=args.emulation_speed,
         **brain_overrides
     )
