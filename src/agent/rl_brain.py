@@ -72,9 +72,12 @@ class RLBrain(ABC):
         pass
 
     @abstractmethod
-    def train_step(self) -> Tuple[Optional[torch.Tensor], Dict[str, float]]:
+    def train_step(self, global_step: Optional[int] = None) -> Tuple[Optional[torch.Tensor], Dict[str, float]]:
         """
         Perform one training update step.
+
+        Args:
+            global_step: Global step counter for epsilon decay and logging
 
         Returns:
             loss: PyTorch loss tensor (None if not enough data to train)

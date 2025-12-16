@@ -127,7 +127,8 @@ class PokemonTrainer:
         save_tag: str,
         device: str,
         seed: int | None,
-        human_recorder: Optional[HumanExperienceRecorder] = None
+        human_recorder: Optional[HumanExperienceRecorder] = None,
+        num_episodes: int = 500
     ):
         self.cfg = cfg
         self.brain_type = brain_type
@@ -137,13 +138,14 @@ class PokemonTrainer:
         self.device = torch.device(device)
         self.seed = self._seed_everything(seed)
         self.human_recorder = human_recorder
+        self.num_episodes = num_episodes
 
         self.checkpoint_dir, self.log_dir = self._prepare_dirs(checkpoint_root)
         self.logger = Logger(log_dir=self.log_dir, run_name=run_name)
 
         # Training params
         self.llm_update_freq = 300
-        self.total_steps = cfg["training"]["total_steps"]
+        self.total_steps = cfg["training"]["total_steps"]  # Now represents max steps per episode
         self.steps_done = 0
         self.current_badges = 0
 
@@ -230,83 +232,132 @@ class PokemonTrainer:
                   f"{self.brain_config.get('batch_size', 'N/A')} batch size")
 
     def run(self):
-        """Main training loop."""
+        """Main episodic training loop with dreaming phases."""
+        # Initialize once outside all loops
         obs, info = self._boot_env()
         self._update_memory(info)
         self._poll_goal_strategy(info, force=True)
 
-        pbar = tqdm(total=self.total_steps, file=sys.stderr, dynamic_ncols=True)
+        # Episodic configuration
+        max_episodes = self.num_episodes
+        max_steps_per_episode = self.total_steps or 10000  # Use config total_steps as max per episode
+        dreaming_iterations = max(1, max_steps_per_episode // 10)  # Dream iterations = episode length / 10
+        global_step_counter = 0  # Persists across all episodes
+        total_max_steps = max_episodes * max_steps_per_episode  # For progress bar
+
+        # Create two progress bars: global and per-episode
+        global_pbar = tqdm(total=max_episodes, desc="Overall Progress", position=0, file=sys.stderr, dynamic_ncols=True)
         self.goal_step_count = 0
 
-        while self.steps_done < self.total_steps:
-            self.steps_done += 1
+        # Outer Loop: Episodes
+        for episode in range(max_episodes):
+            episode_num = episode + 1
+            
+            # Reset environment at start of episode
+            obs, info = self.env.reset()
+            self.reward_sys.reset()
+            self._update_memory(info)
+            self._poll_goal_strategy(info, force=True)
+            
+            # Create episode-specific progress bar
+            episode_pbar = tqdm(total=max_steps_per_episode, desc=f"Episode {episode_num}", 
+                              position=1, leave=True, file=sys.stderr, dynamic_ncols=True)
+            episode_steps = 0
+            
+            # Inner Loop: Gameplay within episode
+            while episode_steps < max_steps_per_episode:
+                global_step_counter += 1
+                episode_steps += 1
+                self.steps_done = global_step_counter  # For compatibility with existing code
 
-            # 2. Think: Poll goal strategy periodically
-            if self.steps_done % self.llm_update_freq == 0:
-                self._poll_goal_strategy(info)
+                # 2. Think: Poll goal strategy periodically
+                if global_step_counter % self.llm_update_freq == 0:
+                    self._poll_goal_strategy(info)
 
-            # 3. Act: Select & execute action
-            current_cursor_embedding = getattr(self, "_current_cursor_embedding", self._zero_text_embedding)
-            action_data = self._select_action(obs, info, current_cursor_embedding)
-            next_obs, _, terminated, truncated, next_info = self.env.step(action_data["env_action"])
+                # 3. Act: Select & execute action
+                current_cursor_embedding = getattr(self, "_current_cursor_embedding", self._zero_text_embedding)
+                action_data = self._select_action(obs, info, current_cursor_embedding)
+                next_obs, _, terminated, truncated, next_info = self.env.step(action_data["env_action"])
 
-            # 4. Learn: Compute rewards and train
-            next_cursor_embedding = self._update_memory(next_info)
-            reward_data = self._compute_rewards(info, next_info, next_obs, action_data)
+                # 4. Learn: Compute rewards and train
+                next_cursor_embedding = self._update_memory(next_info)
+                reward_data = self._compute_rewards(info, next_info, next_obs, action_data)
 
-            # Store experience and train
-            self.agent.store_experience(
-                obs=obs,
-                action=action_data["local_action"],
-                reward=reward_data["total"],
-                next_obs=next_obs,
-                done=False,
-                text_embedding=current_cursor_embedding,
-                next_text_embedding=next_cursor_embedding
-            )
+                # Store experience and train
+                self.agent.store_experience(
+                    obs=obs,
+                    action=action_data["local_action"],
+                    reward=reward_data["total"],
+                    next_obs=next_obs,
+                    done=terminated or truncated,
+                    text_embedding=current_cursor_embedding,
+                    next_text_embedding=next_cursor_embedding
+                )
 
-            loss, metrics = self.agent.train_step()
-            if loss is not None:
-                self._periodically_log_metrics(reward_data, metrics)
-            else:
-                self._periodically_log_metrics(reward_data, {})
+                loss, metrics = self.agent.train_step(global_step=global_step_counter)
+                if loss is not None:
+                    self._periodically_log_metrics(reward_data, metrics)
+                else:
+                    self._periodically_log_metrics(reward_data, {})
 
-            if self._maybe_record_human_demo(
-                obs=obs,
-                next_obs=next_obs,
-                local_action=action_data["local_action"],
-                env_action=action_data["env_action"],
-                reward=reward_data["total"],
-                done=False,
-                text_embedding=current_cursor_embedding,
-                next_text_embedding=next_cursor_embedding
-            ):
-                print(f"\nCaptured {self.human_recorder.size} human transitions. Stopping early.")
-                break
+                if self._maybe_record_human_demo(
+                    obs=obs,
+                    next_obs=next_obs,
+                    local_action=action_data["local_action"],
+                    env_action=action_data["env_action"],
+                    reward=reward_data["total"],
+                    done=terminated or truncated,
+                    text_embedding=current_cursor_embedding,
+                    next_text_embedding=next_cursor_embedding
+                ):
+                    print(f"\nCaptured {self.human_recorder.size} human transitions. Stopping early.")
+                    episode_pbar.close()
+                    break
 
-            self._log_progress(info, reward_data, pbar)
+                self._log_progress(info, reward_data, global_pbar, episode_pbar, episode_num, episode_steps)
 
-            # Loop upkeep
-            obs, info = next_obs, next_info
+                # Loop upkeep
+                obs, info = next_obs, next_info
 
-            if terminated or next_info.get("window_closed"):
+                # Break conditions for episode
+                if terminated or truncated or next_info.get("window_closed"):
+                    print(f"\nEpisode {episode_num} ended: terminated={terminated}, truncated={truncated}")
+                    break
+
+                # Handle map changes (clear goals)
+                if next_info.get("map_id") != info.get("map_id"):
+                    if self.director.active_goal:
+                        self.director.complete_goal(status="map_changed")
+                    self.director.clear_goals()
+                    self.goal_step_count = 0
+                    self._poll_goal_strategy(next_info)
+
+                # Checkpoint saving
+                if global_step_counter % self.cfg["training"]["save_frequency"] == 0:
+                    self._save_agent(self.save_tag)
+
+                episode_pbar.update(1)
+
+            # Close episode progress bar and update global progress
+            episode_pbar.close()
+            global_pbar.update(1)
+
+            # Dreaming Phase: Train without environment steps
+            if self.brain_type.lower() != "human":  # Skip dreaming for human players
+                print(f"💭 Dreaming... Consolidating {dreaming_iterations} batches...")
+                for dream_step in range(dreaming_iterations):
+                    loss, metrics = self.agent.train_step(global_step=global_step_counter)
+                    if dream_step % 25 == 0 and loss is not None:
+                        print(f"  Dream step {dream_step + 1}/{dreaming_iterations}, loss: {loss:.4f}")
+                print(f"💭 Dreaming complete for episode {episode_num}")
+
+            # Early termination check
+            if next_info.get("window_closed"):
                 print("\nEnvironment requested termination. Ending training loop.")
                 break
 
-            # Handle map changes (clear goals)
-            if next_info.get("map_id") != info.get("map_id"):
-                if self.director.active_goal:
-                    self.director.complete_goal(status="map_changed")
-                self.director.clear_goals()
-                self.goal_step_count = 0
-                self._poll_goal_strategy(next_info)
-
-            # Checkpoint saving
-            if self.steps_done % self.cfg["training"]["save_frequency"] == 0:
-                self._save_agent(self.save_tag)
-
-            pbar.update(1)
-
+        # Close global progress bar
+        global_pbar.close()
         self._cleanup()
 
     def _boot_env(self) -> Tuple[np.ndarray, Dict[str, Any]]:
@@ -607,7 +658,7 @@ class PokemonTrainer:
         metrics.update(brain_metrics)
         self.logger.log_step(metrics, self.steps_done)
 
-    def _log_progress(self, info, reward_data, pbar):
+    def _log_progress(self, info, reward_data, global_pbar, episode_pbar, episode_num, episode_steps):
         self.session_reward += reward_data["total"]
         self.session_steps += 1
 
@@ -617,7 +668,14 @@ class PokemonTrainer:
         strategy_info = self.strategy_loader.get_strategy_info()
         goal_strat = strategy_info["goal_strategy"][:3].upper()  # LLM, HEU, NON
 
-        # Add battle/enemy health info
+        # Global progress bar: Overall run info
+        global_pbar.set_description(
+            f"[{self.brain_type.upper()}|{goal_strat}] "
+            f"ε:{epsilon:.3f} | "
+            f"Badges:{self.current_badges}"
+        )
+
+        # Episode progress bar: Current episode details
         battle_active = info.get("battle_active", False)
         if battle_active:
             enemy_hp_current = info.get("enemy_hp_current", 0)
@@ -636,11 +694,8 @@ class PokemonTrainer:
         cursor_display = getattr(self, '_current_cursor_display', '')
         cursor_info = f" | 📍{cursor_display}" if cursor_display else ""
 
-        pbar.set_description(
-            f"[{self.brain_type.upper()}|{goal_strat}] "
+        episode_pbar.set_description(
             f"Rew:{self.session_reward:.1f} | "
-            f"ε:{epsilon:.3f} | "
-            f"Badges:{self.current_badges} | "
             f"{location_info}{cursor_info}"
         )
 
@@ -693,6 +748,7 @@ def train(
     checkpoint_root="experiments",
     save_tag="latest",
     total_steps_override=None,
+    num_episodes=500,
     headless=None,
     state_path_override=None,
     device_override=None,
@@ -709,6 +765,8 @@ def train(
         brain_type: "crossq", "bbf", "rainbow", or "human" (keyboard control)
         strategy_preset: "llm", "heuristic", "reactive", or "hybrid"
         memory_preset: "minimal", "low", "medium", or "high"
+        total_steps_override: Maximum steps per episode (None uses config default)
+        num_episodes: Number of episodes to run (default: 500)
         brain_overrides: Additional brain config overrides
 
     When brain_type="human":
@@ -758,7 +816,8 @@ def train(
 
     trainer = PokemonTrainer(
         cfg, brain_type, brain_config, run_name,
-        checkpoint_root, save_tag, device, seed, human_recorder=human_recorder
+        checkpoint_root, save_tag, device, seed, human_recorder=human_recorder,
+        num_episodes=num_episodes
     )
     trainer.setup()
     trainer.run()
@@ -786,7 +845,8 @@ if __name__ == "__main__":
     parser.add_argument("--run-name", type=str, help="Experiment run name")
     parser.add_argument("--checkpoint-root", type=str, default="experiments")
     parser.add_argument("--save-tag", type=str, default="latest")
-    parser.add_argument("--total-steps", type=int)
+    parser.add_argument("--total-steps", type=int, help="Maximum steps per episode")
+    parser.add_argument("--num-episodes", type=int, default=500, help="Number of episodes to run")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--windowed", dest="headless", action="store_false")
     parser.set_defaults(headless=None)
@@ -830,6 +890,7 @@ if __name__ == "__main__":
         checkpoint_root=args.checkpoint_root,
         save_tag=args.save_tag,
         total_steps_override=args.total_steps,
+        num_episodes=args.num_episodes,
         headless=args.headless,
         state_path_override=args.state_path,
         device_override=args.device,

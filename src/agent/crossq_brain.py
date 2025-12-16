@@ -121,7 +121,7 @@ class CrossQBrain(RLBrain):
         self.human_buffer: Optional[HumanExperienceBuffer] = None
         human_buffer_path = config.get("human_buffer_path")
         if human_buffer_path:
-            self._load_human_buffer(human_buffer_path, weights_only=True)
+            self._load_human_buffer(human_buffer_path)
 
     def encode_obs(self, obs: torch.Tensor) -> torch.Tensor:
         """Encode raw observations into feature vector."""
@@ -200,9 +200,12 @@ class CrossQBrain(RLBrain):
         """Store transition in replay buffer."""
         self.replay_buffer.push(state, action, reward, next_state, done)
 
-    def train_step(self) -> Tuple[Optional[torch.Tensor], Dict[str, float]]:
+    def train_step(self, global_step: Optional[int] = None) -> Tuple[Optional[torch.Tensor], Dict[str, float]]:
         """
         Perform one CrossQ training update.
+
+        Args:
+            global_step: Global step counter for epsilon decay and logging
 
         Returns:
             loss: PyTorch loss tensor (None if not enough data)

@@ -197,14 +197,17 @@ class PokemonAgent:
         # Store in brain
         self.brain.store_experience(state, action, reward, next_state, done, **kwargs)
 
-    def train_step(self) -> Tuple[Optional[torch.Tensor], Dict[str, float]]:
+    def train_step(self, global_step: Optional[int] = None) -> Tuple[Optional[torch.Tensor], Dict[str, float]]:
         """
         Perform one training update.
+
+        Args:
+            global_step: Global step counter for epsilon decay and logging
 
         Returns:
             (loss, metrics) from the brain
         """
-        return self.brain.train_step()
+        return self.brain.train_step(global_step=global_step)
 
     def save_checkpoint(self, path: str) -> None:
         """Save agent state."""

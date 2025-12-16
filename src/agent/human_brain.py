@@ -188,9 +188,12 @@ class HumanBrain(RLBrain):
         """
         pass
 
-    def train_step(self) -> Tuple[Optional[torch.Tensor], Dict[str, float]]:
+    def train_step(self, global_step: Optional[int] = None) -> Tuple[Optional[torch.Tensor], Dict[str, float]]:
         """
         Training step (no-op for human brain).
+
+        Args:
+            global_step: Global step counter (ignored for human brain)
 
         Returns:
             (None, {}) - no loss, no metrics to compute
