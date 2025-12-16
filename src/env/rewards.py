@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 from src.core.game_interface import MemoryInterface
 
@@ -25,7 +25,11 @@ class RewardSystem:
         self._memory_interface = memory_interface
         self.visited_maps: set[int] = set()
         self.seen_coords: set[Tuple[int, int, int]] = set()
-        self.visited_warps: set[Tuple[int, int, int]] = set()
+        self.coord_visit_counts: dict[Tuple[int, int, int], int] = {}  # Global visit counter with diminishing returns
+        self.warp_visit_counts: dict[Tuple[int, int, int, int], int] = {}
+        self.warp_pair_visit_counts: dict[FrozenSet[Tuple[int, int, int, int]], int] = {}
+        self.warp_pair_lookup: dict[Tuple[int, int, int, int], FrozenSet[Tuple[int, int, int, int]]] = {}
+        self.last_warp_tile_key: Optional[Tuple[int, int, int, int]] = None
         self.warp_seen_positions: dict[int, set[Tuple[int, int]]] = {}
         self.last_coord: Tuple[int, int, int] = (0, 0, 0)
         self.last_map_id: Optional[int] = None
@@ -68,10 +72,14 @@ class RewardSystem:
         self._memory_interface = memory_interface
 
     def reset(self):
-        """Clear all per-episode tracking variables."""
+        """Clear all tracking variables including persistent coordinates (full training reset)."""
         self.visited_maps.clear()
         self.seen_coords.clear()
-        self.visited_warps.clear()
+        self.coord_visit_counts.clear()  # Only clear visit counts on full training reset
+        self.warp_visit_counts.clear()
+        self.warp_pair_visit_counts.clear()
+        self.warp_pair_lookup.clear()
+        self.last_warp_tile_key = None
         self.warp_seen_positions.clear()
         self.last_coord = (0, 0, 0)
         self.last_map_id = None
@@ -97,6 +105,36 @@ class RewardSystem:
         self.post_battle_grace_steps = 0
         self.battles_per_map.clear()
         self.current_battle_map = None
+
+    def reset_episode(self):
+        """Reset per-episode variables but keep global coordinate visit counts."""
+        # Clear temporary coordinate tracking but keep visit counts for diminishing returns
+        self.seen_coords.clear()
+        
+        # Clear other per-episode tracking
+        self.last_coord = (0, 0, 0)
+        self.last_map_id = None
+        self.steps_stagnant = 0
+        self.last_hp_fraction = 1.0
+        self.last_enemy_hp_fraction = None
+        self.was_in_battle = False
+        self.last_menu_cursor = None
+        self.last_menu_target = None
+        self.menu_steps_stagnant = 0
+        self.last_menu_open = False
+        self.consecutive_already_out = 0
+        self.last_narrative = ""
+        self.cursor_history = []
+        self.current_battle_rewards = 0.0
+        self.battle_turns = 0
+        self.menu_open_steps = 0
+        self.consecutive_run_attempts = 0
+        self.post_battle_grace_steps = 0
+        self.current_battle_map = None
+        self.last_warp_tile_key = None
+        
+        # NOTE: coord_visit_counts persists globally across all episodes
+        # This provides diminishing returns for revisited coordinates
 
     def compute_components(
         self,
@@ -165,9 +203,21 @@ class RewardSystem:
             if connection_count:
                 rewards["nav_reward"] += cfg.get("nav_connection_discovery", 0.0) * float(connection_count)
 
+        # Global coordinate tracking with diminishing returns
+        # Convert to integers to prevent decimal coordinate exploit
+        coord_key = (int(map_id), int(x), int(y))
+        visit_count = self.coord_visit_counts.get(coord_key, 0) + 1
+        self.coord_visit_counts[coord_key] = visit_count
+        
+        # Calculate diminishing returns: reward / sqrt(visit_count)
+        base_reward = cfg.get("new_tile", 0.0)
+        if base_reward != 0.0:
+            diminished_reward = base_reward / (visit_count ** 0.5)  # sqrt decay
+            rewards["nav_reward"] += diminished_reward
+        
+        # Keep the old seen_coords for other logic that might depend on it
         if coord not in self.seen_coords:
             self.seen_coords.add(coord)
-            rewards["nav_reward"] += cfg.get("new_tile", 0.0)
 
         # Skip movement penalties during battles - player can't move on overworld
         if not battle_active:
@@ -213,6 +263,8 @@ class RewardSystem:
             # Reward reaching warp tiles to encourage entering/exiting buildings.
             warp_bonus = cfg.get("nav_warp", 0.0)
             warp_proximity = cfg.get("nav_warp_proximity", 0.0)
+            player_moved = coord != prev_coord
+            player_x, player_y = int(x), int(y)
             if map_warps:
                 for warp in map_warps:
                     wx, wy = warp.get("x"), warp.get("y")
@@ -220,16 +272,28 @@ class RewardSystem:
                     edge_known = self._edge_exists(map_id, dest_map)
                     if wx is None or wy is None:
                         continue
-                    if x == wx and y == wy:
-                        key = (map_id, wx, wy)
-                        if not edge_known and dest_map is not None and key not in self.visited_warps:
-                            rewards["nav_reward"] += warp_bonus
-                            self.visited_warps.add(key)
-                    else:
-                        # Small shaping toward warps that lead to unexplored maps.
-                        dist = abs(int(wx) - int(x)) + abs(int(wy) - int(y))
-                        if warp_proximity and dist > 0 and not edge_known and dest_map is not None:
-                            rewards["nav_reward"] += warp_proximity / float(dist)
+                    warp_x, warp_y = int(wx), int(wy)
+                    dest_id = int(dest_map) if dest_map is not None else -1
+                    if player_x == warp_x and player_y == warp_y:
+                        warp_key = (int(map_id), warp_x, warp_y, dest_id)
+                        pair_key = self._ensure_warp_pair_link(warp_key)
+                        if player_moved and warp_bonus:
+                            visit_count = self.warp_visit_counts.get(warp_key, 0) + 1
+                            self.warp_visit_counts[warp_key] = visit_count
+                            decay = 1.0 / (visit_count ** 0.5)
+                            pair_multiplier = 1.0
+                            if pair_key is not None:
+                                pair_count = self.warp_pair_visit_counts.get(pair_key, 0) + 1
+                                self.warp_pair_visit_counts[pair_key] = pair_count
+                                pair_multiplier = 1.0 / (pair_count ** 0.5)
+                            rewards["nav_reward"] += warp_bonus * decay * pair_multiplier
+                        self.last_warp_tile_key = warp_key
+                        continue
+
+                    # Small shaping toward warps that lead to unexplored maps.
+                    dist = abs(warp_x - player_x) + abs(warp_y - player_y)
+                    if warp_proximity and dist > 0 and not edge_known and dest_map is not None:
+                        rewards["nav_reward"] += warp_proximity / float(dist)
 
         # Track traversed map-to-map edges (always, even after battle ends)
         if prev_map_id is None:
@@ -645,6 +709,32 @@ class RewardSystem:
         """Clear the tracked overworld graph of maps and their traversed edges."""
         self.map_graph.clear()
         self.discovered_edges.clear()
+
+    def _ensure_warp_pair_link(
+        self, current_key: Tuple[int, int, int, int]
+    ) -> Optional[FrozenSet[Tuple[int, int, int, int]]]:
+        """
+        Return the paired warp identifier for the current warp tile, creating it if we
+        detect back-to-back warps that link to each other (i.e., the same doorway).
+        """
+        pair_key = self.warp_pair_lookup.get(current_key)
+        if pair_key is not None:
+            return pair_key
+
+        last_key = self.last_warp_tile_key
+        if (
+            last_key is None
+            or current_key[3] == -1
+            or last_key[3] == -1
+        ):
+            return None
+
+        if last_key[0] == current_key[3] and current_key[0] == last_key[3]:
+            pair_key = frozenset((current_key, last_key))
+            self.warp_pair_lookup[current_key] = pair_key
+            self.warp_pair_lookup[last_key] = pair_key
+            return pair_key
+        return None
 
     def _edge_exists(self, map_a: Optional[int], map_b: Optional[int]) -> bool:
         """Check if an undirected edge between two maps has already been discovered."""

@@ -230,6 +230,14 @@ class PokemonTrainer:
         if self.brain_type.lower() != "human":
             print(f"  Memory: {self.brain_config.get('buffer_capacity', 'N/A')} capacity, "
                   f"{self.brain_config.get('batch_size', 'N/A')} batch size")
+            
+            # Auto-tune epsilon decay based on total training steps
+            max_steps_per_episode = self.total_steps or 10000
+            total_training_steps = self.num_episodes * max_steps_per_episode
+            
+            # Check if agent has a brain with epsilon decay tuning
+            if hasattr(self.agent, 'brain') and hasattr(self.agent.brain, 'set_total_training_steps'):
+                self.agent.brain.set_total_training_steps(total_training_steps)
 
     def run(self):
         """Main episodic training loop with dreaming phases."""
@@ -255,7 +263,7 @@ class PokemonTrainer:
             
             # Reset environment at start of episode
             obs, info = self.env.reset()
-            self.reward_sys.reset()
+            self.reward_sys.reset_episode()  # Use episode reset to preserve coordinate tracking
             self._update_memory(info)
             self._poll_goal_strategy(info, force=True)
             

@@ -87,6 +87,10 @@ class CrossQBrain(RLBrain):
         )
         self.steps_done = 0
         
+        # Auto-calculated decay rate based on total training steps
+        self._total_training_steps = None
+        self._decay_factor = 0.7  # What fraction of training should reach epsilon_end (70%)
+        
         # Exploration improvements for sparse rewards
         self.action_counts = np.zeros(self.action_dim)  # Track action frequency
         self.state_visit_counts = {}  # Track state visitation for novelty
@@ -286,7 +290,7 @@ class CrossQBrain(RLBrain):
         self.optimizer.step()
 
         # Update epsilon
-        self._update_epsilon()
+        self._update_epsilon(global_step)
 
         # Update priorities in replay buffer
         with torch.no_grad():
@@ -308,12 +312,41 @@ class CrossQBrain(RLBrain):
 
         return loss, metrics
 
-    def _update_epsilon(self) -> None:
+    def _update_epsilon(self, global_step: Optional[int] = None) -> None:
         """Exponentially decay epsilon using configured decay rate."""
-        self.steps_done += 1
+        if global_step is not None:
+            # Use global step for epsilon decay across entire training run
+            current_step = global_step
+        else:
+            # Fallback to brain's internal step counter
+            self.steps_done += 1
+            current_step = self.steps_done
+            
         decay_rate = max(1.0, self.epsilon_decay_rate)
-        decay_multiplier = np.exp(-self.steps_done / decay_rate)
+        decay_multiplier = np.exp(-current_step / decay_rate)
         self.epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * decay_multiplier
+
+    def set_total_training_steps(self, total_steps: int) -> None:
+        """
+        Set the total expected training steps and auto-calculate epsilon decay rate.
+        
+        Args:
+            total_steps: Total steps across all episodes (num_episodes * max_steps_per_episode)
+        """
+        self._total_training_steps = total_steps
+        
+        # Calculate decay rate so epsilon reaches ~epsilon_end at decay_factor * total_steps
+        target_step = total_steps * self._decay_factor
+        
+        # Solve: epsilon_end = epsilon_end + (epsilon_start - epsilon_end) * exp(-target_step / decay_rate)
+        # This gives: exp(-target_step / decay_rate) = 0.05 (small value close to epsilon_end)
+        # So: decay_rate = -target_step / ln(0.05)
+        decay_rate = -target_step / np.log(0.05)  # 0.05 = small multiplier for sweet spot
+        
+        self.epsilon_decay_rate = max(1.0, decay_rate)
+        
+        print(f"🎯 Auto-tuned epsilon decay: {self.epsilon_decay_rate:.0f} steps "
+              f"(reaches ~{self.epsilon_end} at {target_step:.0f}/{total_steps} steps)")
 
     def save_checkpoint(self, path: str) -> None:
         """Save brain state to disk."""
@@ -331,7 +364,7 @@ class CrossQBrain(RLBrain):
 
     def load_checkpoint(self, path: str) -> None:
         """Load brain state from disk."""
-        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
 
         self.q_net.load_state_dict(checkpoint["q_net"])
         self.optimizer.load_state_dict(checkpoint["optimizer"])

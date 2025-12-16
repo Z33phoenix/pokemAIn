@@ -28,7 +28,7 @@ training:
   warmup_steps: 1000
   batch_size: 32
   save_frequency: 5000
-  fast_update_frequency: 1
+  fast_update_frequency: 4
   reward_clip: 15.0            # Match rewards.reward_clip for consistency
   # Note: epsilon is configured in config/brain_configs.yaml under each brain type
 
@@ -61,7 +61,7 @@ rewards:
   nav_new_connection: 5.0     # Finding new paths between maps
   nav_connection_edge: 1.5    # Reaching map edges with connections
   nav_warp: 4.0               # Using warps to new areas
-  nav_warp_proximity: 0.15    # Small shaping towards unexplored warps
+  nav_warp_proximity: 0.0     # DISABLED - Ruling out as source of nav exploit
 
   # Movement penalties (only after repeated failures)
   wall_bump: -0.3             # Mild penalty per bump (accumulates if stuck)
