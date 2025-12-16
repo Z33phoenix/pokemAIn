@@ -121,7 +121,7 @@ class CrossQBrain(RLBrain):
         self.human_buffer: Optional[HumanExperienceBuffer] = None
         human_buffer_path = config.get("human_buffer_path")
         if human_buffer_path:
-            self._load_human_buffer(human_buffer_path)
+            self._load_human_buffer(human_buffer_path, weights_only=True)
 
     def encode_obs(self, obs: torch.Tensor) -> torch.Tensor:
         """Encode raw observations into feature vector."""

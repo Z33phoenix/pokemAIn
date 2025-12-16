@@ -628,7 +628,9 @@ class PokemonTrainer:
             else:
                 location_info = "⚔️ Battle"
         else:
-            location_info = "🌍 Overworld"
+            map_id = info.get("map_id")
+            map_name = self.game_data.map_id_to_name(map_id) if map_id is not None else "Unknown"
+            location_info = f"🌍 {map_name}"
 
         # Add cursor info if available
         cursor_display = getattr(self, '_current_cursor_display', '')
