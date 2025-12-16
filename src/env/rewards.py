@@ -59,6 +59,10 @@ class RewardSystem:
         # Post-battle grace period to ignore stale text penalties
         self.post_battle_grace_steps = 0
 
+        # Per-map battle tracking for diminishing returns
+        self.battles_per_map: dict[int, int] = {}
+        self.current_battle_map: Optional[int] = None
+
     def set_memory_interface(self, memory_interface: MemoryInterface):
         """Set the memory interface for this reward system."""
         self._memory_interface = memory_interface
@@ -91,6 +95,8 @@ class RewardSystem:
         self.menu_open_steps = 0
         self.consecutive_run_attempts = 0
         self.post_battle_grace_steps = 0
+        self.battles_per_map.clear()
+        self.current_battle_map = None
 
     def compute_components(
         self,
@@ -270,19 +276,34 @@ class RewardSystem:
         battle_active = info.get("battle_active", False)
         max_battle_reward_per_battle = cfg.get("max_battle_reward_per_battle", 15.0)  # Cap total battle rewards
         min_battle_penalty_per_battle = cfg.get("min_battle_penalty_per_battle", -20.0)  # Cap total battle penalties
-        
+
+        # Track which map the battle started on (for diminishing returns)
+        if battle_active and not self.was_in_battle:
+            # Battle just started - record the map
+            self.current_battle_map = map_id
+
+        # Get the diminishing returns multiplier for this battle's map
+        battle_map = self.current_battle_map if self.current_battle_map is not None else map_id
+        battle_multiplier = self._get_battle_diminishing_multiplier(battle_map)
+
         if battle_active:
             # Track battle turns and apply mild time penalty
             self.battle_turns += 1
             battle_tick_reward = cfg.get("battle_tick", 0.0)
-            
+
             # Only apply tick penalty if we haven't hit the penalty floor
             if self.current_battle_rewards > min_battle_penalty_per_battle:
                 rewards["battle_reward"] += battle_tick_reward
                 self.current_battle_rewards += battle_tick_reward
         else:
             if self.was_in_battle:
-                # Battle just ended - check if we won or lost
+                # Battle just ended - increment battle count for the map
+                if self.current_battle_map is not None:
+                    self.battles_per_map[self.current_battle_map] = (
+                        self.battles_per_map.get(self.current_battle_map, 0) + 1
+                    )
+
+                # Check if we won or lost
                 # Win = we still have HP, Loss = we blacked out (HP near 0 or respawned)
                 hp_percent = info.get("hp_percent", 1.0)
                 battle_loss_threshold = cfg.get("battle_loss_threshold", 0.15)  # Default: below 15% HP = loss
@@ -292,12 +313,14 @@ class RewardSystem:
                 # Check for black out: HP very low OR sudden map change to Pokemon Center
                 blacked_out = hp_percent <= battle_loss_threshold
 
+                # Apply diminishing returns multiplier to win/loss rewards
                 if blacked_out:
-                    rewards["battle_reward"] += battle_loss_reward
+                    rewards["battle_reward"] += battle_loss_reward * battle_multiplier
                 else:
-                    rewards["battle_reward"] += battle_win_reward
+                    rewards["battle_reward"] += battle_win_reward * battle_multiplier
                 self.current_battle_rewards = 0.0
                 self.battle_turns = 0
+                self.current_battle_map = None  # Reset for next battle
                 # Reset ALL penalty counters to prevent post-battle penalty explosions
                 self.consecutive_already_out = 0
                 self.consecutive_run_attempts = 0
@@ -320,11 +343,12 @@ class RewardSystem:
             if enemy_hp_percent is not None:
                 if self.last_enemy_hp_fraction is None:
                     self.last_enemy_hp_fraction = enemy_hp_percent
-                    
+
                 enemy_delta = (self.last_enemy_hp_fraction or 0.0) - enemy_hp_percent
-                
+
                 if enemy_delta > 0:
-                    damage_reward = cfg.get("battle_damage", 0.0) * enemy_delta
+                    # Apply diminishing returns multiplier to damage rewards
+                    damage_reward = cfg.get("battle_damage", 0.0) * enemy_delta * battle_multiplier
 
                     # Cap battle damage rewards to prevent farming
                     if self.current_battle_rewards + damage_reward > max_battle_reward_per_battle:
@@ -332,14 +356,15 @@ class RewardSystem:
 
                     rewards["battle_reward"] += damage_reward
                     self.current_battle_rewards += damage_reward
-                    
+
                 self.last_enemy_hp_fraction = enemy_hp_percent
             if hp_percent is not None and self.last_hp_fraction is not None:
                 damage_taken = self.last_hp_fraction - hp_percent
                 if damage_taken > 0:
-                    rewards["battle_reward"] += cfg.get("battle_damage_taken", 0.0) * damage_taken
+                    # Apply diminishing returns to damage taken penalty as well
+                    rewards["battle_reward"] += cfg.get("battle_damage_taken", 0.0) * damage_taken * battle_multiplier
             if hp_percent is not None and hp_percent >= cfg.get("battle_hp_high_threshold", 1.0):
-                rewards["battle_reward"] += cfg.get("battle_hp_high_bonus", 0.0)
+                rewards["battle_reward"] += cfg.get("battle_hp_high_bonus", 0.0) * battle_multiplier
 
         if hp_percent is not None and hp_percent > self.last_hp_fraction and hp_percent >= cfg.get("heal_target", 0.0):
             rewards["global_reward"] += cfg.get("heal_success", 0.0)
@@ -642,6 +667,26 @@ class RewardSystem:
         self.map_graph.setdefault(int(map_a), set()).add(int(map_b))
         self.map_graph.setdefault(int(map_b), set()).add(int(map_a))
         return True
+
+    def _get_battle_diminishing_multiplier(self, map_id: int) -> float:
+        """
+        Calculate the diminishing returns multiplier for battles on a given map.
+
+        Battle 1-5: 100% reward (1.0)
+        Battle 6-10: 50% reward (0.5)
+        Battle 11+: 10% reward (0.1)
+
+        This discourages "grind lord" behavior where the agent farms battles
+        instead of exploring new areas.
+        """
+        battle_count = self.battles_per_map.get(map_id, 0)
+
+        if battle_count <= 5:
+            return 1.0
+        elif battle_count <= 10:
+            return 0.5
+        else:
+            return 0.1
 
     @staticmethod
     def _menu_active(info: Dict[str, Any]) -> bool:

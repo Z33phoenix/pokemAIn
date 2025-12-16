@@ -35,33 +35,38 @@ training:
 # =============================================================================
 # Rewards
 # =============================================================================
+# PHILOSOPHY: Exploration jackpots > Battle grinding
+# - New map discovery is the BIG reward (10.0) - the "dopamine hit"
+# - Battles have diminishing returns per map (100% -> 50% -> 10%)
+# - This creates a "breadcrumb trail" of jackpots that outweigh grinding
 rewards:
-  # --- Global progression (BALANCED for stable learning) ---
+  # --- Global progression ---
   step_penalty: 0.0           # No idle penalty
-  reward_clip: 15.0            # Wider clip to let amplified battle rewards come through
-  catch_pokemon: 10.0          # Moderate reward for catching
-  level_up: 12.0               # Clear milestone signal
-  heal_success: 4.0            # Encourage survival
+  reward_clip: 15.0           # Allow big exploration bonuses through
+  catch_pokemon: 8.0          # Good reward for catching (expands team)
+  level_up: 5.0               # Moderate milestone (grinding shouldn't be the goal)
+  heal_success: 3.0           # Encourage survival
   heal_target: 0.85
-  level_reward_scale: 0.8      # Moderate scaling
+  level_reward_scale: 0.3     # Reduced - don't reward grinding too much
 
   # --- Intrinsic motivation (DISABLED) ---
   state_novelty_bonus: 0.0
   action_diversity_bonus: 0.0
   progress_consistency_bonus: 0.0
 
-  # --- Exploration / Navigation (BALANCED) ---
-  new_tile: 0.5                # Small but consistent exploration reward
-  new_map: 5.0                 # Clear signal for map discovery
-  nav_new_connection: 6.0      # Finding new paths
-  nav_connection_edge: 1.0     # Edge bonus
-  nav_warp: 3.0                # Warp bonus
-  nav_warp_proximity: 0.1      # Small shaping towards unexplored warps
-  
+  # --- Exploration / Navigation (THE JACKPOTS) ---
+  # Entering a new map is the BIG reward - worth 10x a diminished battle
+  new_tile: 0.3               # Small consistent exploration reward
+  new_map: 10.0               # MASSIVE jackpot for first-time map entry!
+  nav_new_connection: 5.0     # Finding new paths between maps
+  nav_connection_edge: 1.5    # Reaching map edges with connections
+  nav_warp: 4.0               # Using warps to new areas
+  nav_warp_proximity: 0.15    # Small shaping towards unexplored warps
+
   # Movement penalties (only after repeated failures)
-  wall_bump: -0.5             # Mild penalty per bump (accumulates if stuck)
-  stale_penalty: -0.1          # Penalty for being completely stuck
-  stale_threshold: 50          # Steps before stale penalty kicks in
+  wall_bump: -0.3             # Mild penalty per bump (accumulates if stuck)
+  stale_penalty: -0.1         # Penalty for being completely stuck
+  stale_threshold: 50         # Steps before stale penalty kicks in
   
   # Goal-based rewards (only active when using LLM/heuristic strategies)
   goal_bonus:
@@ -79,16 +84,19 @@ rewards:
       menu_reached: 0.0        # No reward for just reaching menus
       cursor_match: 0.3        # Small reward for cursor targeting
 
-  # --- Battle shaping (Balanced rewards) ---
-  battle_tick: -0.02            # Stronger time pressure so battles register
-  battle_damage: 50.0           # 10x louder signal for making progress
-  battle_damage_taken: -3.0     # 10x louder penalty for taking damage
-  battle_win: 80.0              # 10x clearer victory signal
-  battle_loss: -30.0            # 10x clearer loss penalty
+  # --- Battle shaping (SCALED DOWN - diminishing returns apply per map) ---
+  # Battle 1-5 on a map: 100% reward | Battle 6-10: 50% | Battle 11+: 10%
+  # A full battle at 100% = ~6.0 damage + 8.0 win = ~14.0 total
+  # At 10% multiplier (grind mode) = ~1.4 per battle << 10.0 new map jackpot
+  battle_tick: -0.01            # Mild time pressure
+  battle_damage: 6.0            # Reward for dealing damage (scales with HP%)
+  battle_damage_taken: -2.0     # Penalty for taking damage
+  battle_win: 8.0               # Victory reward (before diminishing returns)
+  battle_loss: -5.0             # Loss penalty (not too harsh)
   battle_hp_high_threshold: 0.0 # Threshold for HP maintenance bonus
-  battle_hp_high_bonus: 0.01     # Small bonus for staying healthy
-  max_battle_reward_per_battle: 150.0   # Higher cap to match amplified rewards
-  min_battle_penalty_per_battle: -100.0 # Cap total penalties per battle
+  battle_hp_high_bonus: 0.01    # Small bonus for staying healthy
+  max_battle_reward_per_battle: 20.0   # Cap per battle (prevents farming)
+  min_battle_penalty_per_battle: -15.0 # Cap total penalties per battle
 
   # --- Menu handling ---
   menu:
