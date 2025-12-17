@@ -66,6 +66,20 @@ class RewardSystem:
         # Per-map battle tracking for diminishing returns
         self.battles_per_map: dict[int, int] = {}
         self.current_battle_map: Optional[int] = None
+        self.party_menu_stuck_steps = 0
+        self.party_menu_force_escape = False
+        self._pending_party_menu_reason: str = ""
+        menu_cfg = self.config.get("menu", {})
+        self.party_menu_timeout_steps = int(menu_cfg.get("battle_party_timeout_steps", 200))
+        self.party_menu_timeout_penalty = float(menu_cfg.get("battle_party_timeout_penalty", -5.0))
+        self._party_menu_narrative_triggers = (
+            "choose a pokemon",
+            "do what with",
+            "which pokemon",
+            "switch which pokemon",
+        )
+        self._party_menu_selection_triggers = {"STATS", "SWITCH", "SHIFT", "SUMMARY"}
+        self._party_menu_stats_terms = ("attack", "defense", "speed", "special", "type1", "type2", "hp ")
 
     def set_memory_interface(self, memory_interface: MemoryInterface):
         """Set the memory interface for this reward system."""
@@ -105,6 +119,9 @@ class RewardSystem:
         self.post_battle_grace_steps = 0
         self.battles_per_map.clear()
         self.current_battle_map = None
+        self.party_menu_stuck_steps = 0
+        self.party_menu_force_escape = False
+        self._pending_party_menu_reason = ""
 
     def reset_episode(self):
         """Reset per-episode variables but keep global coordinate visit counts."""
@@ -132,6 +149,9 @@ class RewardSystem:
         self.post_battle_grace_steps = 0
         self.current_battle_map = None
         self.last_warp_tile_key = None
+        self.party_menu_stuck_steps = 0
+        self.party_menu_force_escape = False
+        self._pending_party_menu_reason = ""
         
         # NOTE: coord_visit_counts persists globally across all episodes
         # This provides diminishing returns for revisited coordinates
@@ -525,6 +545,8 @@ class RewardSystem:
         elif not current_selection:
             self.cursor_history = []
 
+        self._update_party_menu_timeout(info, rewards)
+
         clip_value = cfg.get("reward_clip", np.inf)
         for key, value in rewards.items():
             rewards[key] = float(np.clip(value, -clip_value, clip_value))
@@ -777,6 +799,60 @@ class RewardSystem:
             return 0.5
         else:
             return 0.1
+
+    def _update_party_menu_timeout(self, info: Dict[str, Any], rewards: Dict[str, float]) -> None:
+        """Track battle-party menu stalls, apply penalty, and request escape action if needed."""
+        reason = self._detect_party_menu_reason(info)
+        if reason:
+            self.party_menu_stuck_steps += 1
+            if self.party_menu_stuck_steps >= max(1, self.party_menu_timeout_steps):
+                if self.party_menu_timeout_penalty != 0.0:
+                    rewards["menu_reward"] += self.party_menu_timeout_penalty
+                self.party_menu_force_escape = True
+                self._pending_party_menu_reason = reason
+                self.party_menu_stuck_steps = 0
+        else:
+            self.party_menu_stuck_steps = 0
+            if not self.party_menu_force_escape:
+                self._pending_party_menu_reason = ""
+
+    def _detect_party_menu_reason(self, info: Dict[str, Any]) -> Optional[str]:
+        """Detect whether we are stuck in the party menu during battle and return the trigger that fired."""
+        if not info.get("battle_active"):
+            return None
+        if not info.get("menu_open"):
+            return None
+
+        narrative = str(info.get("text_narrative") or "").lower()
+        if "pkmn" in narrative:
+            narrative = narrative.replace("pkmn", "pokemon")
+        selection = str(info.get("text_selection") or "").strip().upper()
+
+        for phrase in self._party_menu_narrative_triggers:
+            if phrase in narrative:
+                return f"narrative:{phrase}"
+
+        if narrative:
+            for term in self._party_menu_stats_terms:
+                if term in narrative:
+                    return "narrative:stats_screen"
+
+        if selection and selection in self._party_menu_selection_triggers:
+            return f"selection:{selection.lower()}"
+
+        return None
+
+    def consume_party_menu_escape_request(self) -> Tuple[bool, Optional[str]]:
+        """
+        Return whether the trainer should inject a B press to exit the party menu,
+        along with the detection reason for logging/debugging.
+        """
+        if self.party_menu_force_escape:
+            self.party_menu_force_escape = False
+            reason = self._pending_party_menu_reason
+            self._pending_party_menu_reason = ""
+            return True, reason
+        return False, None
 
     @staticmethod
     def _menu_active(info: Dict[str, Any]) -> bool:

@@ -107,6 +107,8 @@ rewards:
     inactive_penalty: 0.0      # DISABLED: Was penalizing normal exploration
     close_penalty: 0.0
     menu_timeout_penalty: -0.08 # Mild penalty for staying too long in menus
+    battle_party_timeout_steps: 200     # Frames allowed in battle party menu before forcing exit
+    battle_party_timeout_penalty: -2.0  # Penalty applied when forced to exit party menu
 
   # --- Repetitive action penalties (REDUCED - single channel, linear scaling) ---
   switch_active_pokemon_penalty: -0.4   # Base penalty, scales linearly up to 3x

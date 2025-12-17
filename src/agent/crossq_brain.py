@@ -89,7 +89,7 @@ class CrossQBrain(RLBrain):
         
         # Auto-calculated decay rate based on total training steps
         self._total_training_steps = None
-        self._decay_factor = 0.7  # What fraction of training should reach epsilon_end (70%)
+        self._decay_factor = 0.15  # What fraction of training should reach epsilon_end (15%)
         
         # Exploration improvements for sparse rewards
         self.action_counts = np.zeros(self.action_dim)  # Track action frequency

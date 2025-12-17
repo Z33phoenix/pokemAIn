@@ -155,6 +155,7 @@ class PokemonTrainer:
         self._text_embedding_dim = TEXT_EMBED_DIM
         self._zero_text_embedding = np.zeros(self._text_embedding_dim, dtype=np.float32)
         self._current_cursor_embedding = self._zero_text_embedding.copy()
+        self._action_name_to_index: Dict[str, int] = {}
 
     def _seed_everything(self, seed: int | None) -> int:
         if seed is None:
@@ -204,6 +205,8 @@ class PokemonTrainer:
         agent_cfg = self.cfg.get("agent", {}).copy()
         allowed_actions = agent_cfg.get("allowed_actions", list(range(self.env.action_space.n)))
         action_names = self.env.get_action_names()
+        if action_names:
+            self._action_name_to_index = {name.upper(): idx for idx, name in enumerate(action_names)}
 
         if isinstance(self.brain_config, dict):
             self.brain_config["text_feature_dim"] = self._text_embedding_dim
@@ -595,6 +598,12 @@ class PokemonTrainer:
         text_embedding: Optional[np.ndarray] = None
     ) -> Dict[str, Any]:
         """Select action using agent."""
+        force_party_escape = False
+        escape_reason = None
+        if hasattr(self, "reward_sys"):
+            force_party_escape, escape_reason = self.reward_sys.consume_party_menu_escape_request()
+        forced_action_tag = None
+
         # Get goal context from director
         _, _, _, goal_ctx = self.director.select_specialist(
             torch.from_numpy(obs).unsqueeze(0).unsqueeze(0),
@@ -610,12 +619,43 @@ class PokemonTrainer:
             text_embedding=text_embedding
         )
 
+        if force_party_escape:
+            forced_env_action = self._get_env_action_index("B")
+            if forced_env_action is not None:
+                env_action = forced_env_action
+                mapped = self._map_env_to_local_action(forced_env_action)
+                if mapped is not None:
+                    local_action = mapped
+                forced_action_tag = "party_menu_escape"
+                reason_suffix = f" ({escape_reason})" if escape_reason else ""
+                print(f"[Safety] Forcing B to exit party menu{reason_suffix}")
+            else:
+                print("[Safety] Party menu escape requested but B action is unavailable in allowed_actions.")
+
         return {
             "env_action": env_action,
             "local_action": local_action,
             "features": features,
-            "goal_ctx": goal_ctx
+            "goal_ctx": goal_ctx,
+            "forced_action": forced_action_tag
         }
+
+    def _get_env_action_index(self, action_name: str) -> Optional[int]:
+        """Map a human-readable action name (e.g., 'B') to the environment action index."""
+        if not action_name:
+            return None
+        mapping = getattr(self, "_action_name_to_index", None) or {}
+        return mapping.get(action_name.upper())
+
+    def _map_env_to_local_action(self, env_action: int) -> Optional[int]:
+        """Convert an environment action index back into the agent's local action index."""
+        allowed = getattr(self.agent, "allowed_actions", None)
+        if not allowed:
+            return None
+        try:
+            return allowed.index(env_action)
+        except ValueError:
+            return None
 
     def _compute_rewards(
         self,
